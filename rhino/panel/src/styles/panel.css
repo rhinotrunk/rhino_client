@@ -44,6 +44,31 @@ input {
   font: inherit;
 }
 input:focus-visible { outline: 2px solid #5076a2; outline-offset: 2px; }
+input::placeholder { color: var(--muted); }
+.commits {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--button);
+}
+.commits button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  min-height: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.commits li:last-child button { border-bottom: 0; }
+.commits .id { color: var(--muted); font-size: 11px; }
 .actions { display: flex; gap: 8px; margin-top: 12px; }
 .actions button { flex: 1; }
 button {

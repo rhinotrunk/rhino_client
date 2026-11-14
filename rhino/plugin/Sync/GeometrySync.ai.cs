@@ -6,8 +6,11 @@ using System.Text.Json;
 
 namespace RhinoClient.Sync;
 
-/// <summary>Where a pull or push should read and write.</summary>
-public sealed record SyncTarget(string Server, string Repo, string Branch);
+/// <summary>Where a pull or push should read and write. An empty pull commit means the branch tip.</summary>
+public sealed record SyncTarget(string Server, string Repo, string Branch, string? Commit = null);
+
+/// <summary>One commit the pull command or panel can offer.</summary>
+public sealed record CommitChoice(string Id, string Message);
 
 public sealed record SyncResult(bool Ok, string Message)
 {
@@ -50,6 +53,10 @@ public sealed class GeometrySync : IDisposable
 
     public Task<SyncResult> PullAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
         Run(() => PullCore(target, cancellationToken), cancellationToken);
+
+    /// <summary>Recent commits on the branch, newest first. Does not run a pull.</summary>
+    public Task<IReadOnlyList<CommitChoice>> ListCommitsAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
+        Task.Run(() => ListCommitsCore(target, cancellationToken), cancellationToken);
 
     public void Dispose()
     {
@@ -155,8 +162,9 @@ public sealed class GeometrySync : IDisposable
         await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
         var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false);
         if (remote is null) throw new SyncException($"Branch '{bound.Branch}' does not exist.");
+        var revision = await ResolvePullRevisionAsync(client, bound, target.Commit, remote.Commit, cancellationToken).ConfigureAwait(false);
         var listed = await client.ListEntitiesAsync(
-            bound.Repo, remote.Commit, doc: Names.DefaultDoc, includeManifests: true, ct: cancellationToken).ConfigureAwait(false);
+            bound.Repo, revision, doc: Names.DefaultDoc, includeManifests: true, ct: cancellationToken).ConfigureAwait(false);
         var entities = listed.Entities;
         DocumentMapper.RejectUnsupported(entities);
         var blobs = await DownloadAsync(client, bound.Repo, ComponentHashes(entities), cancellationToken).ConfigureAwait(false);
@@ -170,6 +178,64 @@ public sealed class GeometrySync : IDisposable
             return _copy.Replace(listed.Commit, entries, serials);
         });
         return SyncResult.Success(WithWarning($"Pulled {bound.Branch} ({listed.Commit}, {objectCount} objects).", warning));
+    }
+
+    private async Task<IReadOnlyList<CommitChoice>> ListCommitsCore(SyncTarget target, CancellationToken cancellationToken)
+    {
+        var bound = Normalize(target);
+        try
+        {
+            return await FetchCommitsAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException) when (LocalServer.IsLoopback(bound.Server))
+        {
+            await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
+            return await FetchCommitsAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<CommitChoice>> FetchCommitsAsync(Bound bound, CancellationToken cancellationToken)
+    {
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false);
+        if (remote is null) throw new SyncException($"Branch '{bound.Branch}' does not exist.");
+        var graph = await client.GraphAsync(bound.Repo, 30, [bound.Branch], cancellationToken).ConfigureAwait(false);
+        return graph.Commits.Select(commit => new CommitChoice(commit.Id, commit.Message)).ToList();
+    }
+
+    private async Task<string> ResolvePullRevisionAsync(
+        RhinoTrunkClient client, Bound bound, string? requested, string tip, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(requested)) return tip;
+        var text = requested.Trim();
+        if (ContentHash.IsValid(text))
+        {
+            var commit = await client.GetCommitAsync(bound.Repo, text, cancellationToken).ConfigureAwait(false);
+            return commit.Id;
+        }
+
+        var graph = await client.GraphAsync(bound.Repo, 100, [bound.Branch], cancellationToken).ConfigureAwait(false);
+        var byId = graph.Commits.Where(commit => IdMatches(commit.Id, text)).ToList();
+        if (byId.Count == 1) return byId[0].Id;
+        if (byId.Count > 1)
+            throw new SyncException($"'{text}' matches {byId.Count} commits. Use the full commit id.");
+
+        var byMessage = graph.Commits
+            .Where(commit => string.Equals(commit.Message.Trim(), text, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (byMessage.Count == 1) return byMessage[0].Id;
+        if (byMessage.Count > 1)
+            throw new SyncException($"'{text}' matches {byMessage.Count} commits. Use the commit id.");
+        throw new SyncException($"No commit on '{bound.Branch}' matches '{text}'.");
+    }
+
+    private static bool IdMatches(string id, string text)
+    {
+        const string prefix = "sha256:";
+        var hex = id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : id;
+        var typed = text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? text[prefix.Length..] : text;
+        return typed.Length >= 4 && hex.StartsWith(typed, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task EnsureBaseMapAsync(RhinoTrunkClient client, string repo, CancellationToken cancellationToken)

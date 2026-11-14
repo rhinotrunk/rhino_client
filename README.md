@@ -24,7 +24,7 @@ Once Rhino opens, run `RhinoClient`. The panel uses Rhino's standard docking sys
 
 A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for `git_engine` next to itself and runs it with `dotnet`. Set `RHINOTRUNK_SERVER_PROJECT` to the server `.csproj` if that project lives somewhere else.
 
-`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
+`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. `Commit` on pull lists recent commit messages; click one, or type a message or a commit id. Leave it empty to pull the branch tip. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
 
 `npm start` launches Rhino 8 with `RHINO_PACKAGE_DIRS` pointing to the build output. It does not use an already running Rhino instance. Restart this development instance after changing C# or rebuilding the embedded UI.
 

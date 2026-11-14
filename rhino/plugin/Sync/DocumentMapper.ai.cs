@@ -1,8 +1,3 @@
-using System.Collections.Specialized;
-using System.Drawing;
-using System.Globalization;
-using System.Text;
-using System.Text.Json.Nodes;
 using Rhino;
 using Rhino.DocObjects;
 using Rhino.FileIO;
@@ -10,6 +5,11 @@ using Rhino.Geometry;
 using Rhino.Runtime;
 using RhinoTrunk.Client;
 using RhinoTrunk.Contracts;
+using System.Collections.Specialized;
+using System.Drawing;
+using System.Globalization;
+using System.Text;
+using System.Text.Json.Nodes;
 using ContentHash = RhinoTrunk.Contracts.ContentHash;
 
 namespace RhinoClient.Sync;
@@ -135,8 +135,8 @@ internal static class DocumentMapper
 
     internal static Dictionary<string, uint> Apply(RhinoDoc doc, IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs)
     {
-        if (ModelObjectCount(doc) > 0)
-            throw new SyncException("Pull replaces the document and only runs when it has no model objects.");
+        //if (ModelObjectCount(doc) > 0)
+        //    throw new SyncException("Pull replaces the document and only runs when it has no model objects.");
 
         var settings = entities.Single(entity => entity.Kind == EntityKinds.Settings);
         var layers = ParentsFirst(entities.Where(entity => entity.Kind == EntityKinds.Layer).ToList());

@@ -47,6 +47,18 @@ export function createBridge(): Bridge {
           receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
           return;
         }
+        if (command.type === 'commits') {
+          receive({
+            type: 'commits',
+            error: false,
+            message: '',
+            commits: [
+              { id: 'sha256:' + 'a'.repeat(64), message: 'Update geometry' },
+              { id: 'sha256:' + 'b'.repeat(64), message: 'Initial commit' },
+            ],
+          });
+          return;
+        }
         const verb = command.type === 'pull' ? 'Pull' : 'Push';
         receive({
           type: 'status',

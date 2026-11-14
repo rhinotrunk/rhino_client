@@ -61,8 +61,12 @@ public sealed class ClientPanel : Panel
                 SendSession();
                 SendStatus(_busy ? _busyMessage : "Connected to Rhino", false, _busy);
                 break;
+            case "commits":
+                _ = SendCommits(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                break;
             case "pull":
-                _ = Pull(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                _ = Pull(new SyncTarget(
+                    Text(command, "server"), Text(command, "repo"), Text(command, "branch"), NullIfEmpty(Text(command, "commit"))));
                 break;
             case "push":
                 _ = Push(
@@ -73,6 +77,9 @@ public sealed class ClientPanel : Panel
     }
 
     internal SyncTarget ReadTarget() => _sync.ReadTarget();
+
+    internal Task<IReadOnlyList<CommitChoice>> ListCommits(SyncTarget target) =>
+        _sync.ListCommitsAsync(target, _unload.Token);
 
     internal Task<SyncResult> Pull(SyncTarget target) => RunAsync(true, target, "");
 
@@ -113,6 +120,43 @@ public sealed class ClientPanel : Panel
             return SyncResult.Fail(ex.Message);
         }
     }
+
+    private async Task SendCommits(SyncTarget target)
+    {
+        if (_closed || _busy) return;
+        try
+        {
+            var commits = await _sync.ListCommitsAsync(target, _unload.Token);
+            if (_closed) return;
+            Post(new
+            {
+                type = "commits",
+                commits = commits.Select(commit => new { id = commit.Id, message = commit.Message }),
+                error = false,
+                message = "",
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
+        {
+            if (_closed) return;
+            Post(new { type = "commits", commits = Array.Empty<CommitChoice>(), error = true, message = ex.Message });
+        }
+    }
+
+    private void Post(object message)
+    {
+        if (_closed) return;
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            if (_closed) return;
+            _bridge.Post(message);
+        });
+    }
+
+    private static string? NullIfEmpty(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private void SendSession()
     {
