@@ -64,7 +64,9 @@ rhino/
     UI/ClientPanel.ai.cs              Eto WebView host and button behavior
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
-    src/main.ts                      button and status UI
+    src/main.tsx                     React entry point
+    src/app.tsx                      panel layout and host state
+    src/components/ui/               local shadcn/ui components
     src/protocol/events.ts           TypeScript message definitions
     src/protocol/bridge.ts           native transport and browser preview
     src/styles/panel.css             light/dark panel styles
@@ -76,5 +78,17 @@ scripts/                             build and development launch helpers
 TypeScript sends `ready` and `button.click`. C# replies with `state` and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
+
+## UI components
+
+The panel uses React and local shadcn/ui components with Tailwind CSS 3 for compatibility with older Rhino embedded browsers. Button, Badge, and Separator are included; their source lives in `rhino/panel/src/components/ui`. Lucide icons bundle as inline SVG. Theme tokens in `src/styles/panel.css` follow Rhino’s light/dark theme, with the OS preference used in browser preview.
+
+To add another component, run from `rhino/panel`:
+
+```sh
+npx shadcn@latest add input
+```
+
+`components.json` configures the component locations and `@/` import alias. Import components into `src/app.tsx` or other React components. The build compiles Tailwind into the embedded HTML and watches source class changes for live reload. Restart the dev server after changing build or Tailwind configuration.
 
 Build output, dependencies, packages, logs, local environment files, and editor caches are excluded by `.gitignore`. Keep source files, `package-lock.json`, `.env.example` templates, and the shared `.vscode` configuration in Git.
