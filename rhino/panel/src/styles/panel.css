@@ -31,6 +31,21 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--background); color: var(--text); }
 main { padding: 16px; }
+label { display: block; margin-top: 10px; color: var(--muted); font-size: 12px; }
+input {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--button);
+  color: inherit;
+  font: inherit;
+}
+input:focus-visible { outline: 2px solid #5076a2; outline-offset: 2px; }
+.actions { display: flex; gap: 8px; margin-top: 12px; }
+.actions button { flex: 1; }
 button {
   width: 100%;
   min-height: 36px;
@@ -47,3 +62,8 @@ button:active:enabled { transform: translateY(1px); }
 button:focus-visible { outline: 2px solid #5076a2; outline-offset: 3px; }
 button:disabled { opacity: .5; cursor: default; }
 p { margin: 10px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+p.error { color: #a12626; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-scheme="light"]) p.error { color: #f0a8a8; }
+}
+:root[data-scheme="dark"] p.error { color: #f0a8a8; }

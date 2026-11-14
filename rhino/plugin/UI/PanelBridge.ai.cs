@@ -7,12 +7,12 @@ namespace RhinoClient.UI;
 internal sealed class PanelBridge : IDisposable
 {
     private readonly WebView _view;
-    private readonly Action<string> _receive;
+    private readonly Action<JsonElement> _receive;
     private readonly Queue<string> _pending = new();
     private bool _loaded;
     private bool _disposed;
 
-    public PanelBridge(WebView view, Action<string> receive)
+    public PanelBridge(WebView view, Action<JsonElement> receive)
     {
         _view = view;
         _receive = receive;
@@ -26,10 +26,8 @@ internal sealed class PanelBridge : IDisposable
         try
         {
             using var message = JsonDocument.Parse(e.Message);
-            if (message.RootElement.ValueKind == JsonValueKind.Object &&
-                message.RootElement.TryGetProperty("type", out var type) &&
-                type.ValueKind == JsonValueKind.String)
-                _receive(type.GetString()!);
+            if (message.RootElement.ValueKind == JsonValueKind.Object)
+                _receive(message.RootElement.Clone());
         }
         catch (JsonException ex)
         {
