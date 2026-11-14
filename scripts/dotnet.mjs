@@ -7,7 +7,7 @@ export function findDotnet() {
   const candidates = [process.env.RHINOCLIENT_DOTNET, binary, join(homedir(), '.dotnet', binary)];
   for (const candidate of candidates.filter(Boolean)) {
     const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (result.status === 0 && result.stdout.trim().startsWith('8.0.')) return candidate;
+    if (result.status === 0 && result.stdout.trim().match(/^(8|9|10)./)) return candidate;
   }
   throw new Error('Install the .NET 8 SDK, or set RHINOCLIENT_DOTNET to its dotnet executable.');
 }

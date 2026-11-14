@@ -27,6 +27,15 @@
     --input: 0 0% 72%;
     --ring: 211 46% 45%;
     --radius: 0.5rem;
+    /* RhinoTrunk change states (docs/STYLE_GUIDE.md) */
+    --added: 152 60% 34%;
+    --added-soft: 150 45% 91%;
+    --modified: 35 85% 40%;
+    --modified-soft: 45 90% 90%;
+    --deleted: 0 65% 47%;
+    --deleted-soft: 0 80% 94%;
+    --agent: 265 55% 52%;
+    --agent-soft: 265 70% 94%;
   }
 
   :root.dark {
@@ -49,8 +58,24 @@
     --border: 0 0% 32%;
     --input: 0 0% 38%;
     --ring: 211 58% 66%;
+    --added: 152 50% 55%;
+    --added-soft: 152 35% 20%;
+    --modified: 40 85% 60%;
+    --modified-soft: 35 45% 20%;
+    --deleted: 0 70% 65%;
+    --deleted-soft: 0 40% 22%;
+    --agent: 265 70% 72%;
+    --agent-soft: 265 35% 24%;
   }
 
   * { @apply border-border; }
   body { @apply m-0 bg-background text-foreground antialiased; }
+}
+
+@layer utilities {
+  /* Newly pulled, pushed or agent-made commits flash once in the history. */
+  @media (prefers-reduced-motion: no-preference) {
+    .animate-flash { animation: trunk-flash 1.4s ease-out; }
+  }
+  @keyframes trunk-flash { from { background-color: hsl(var(--added-soft)); } to { background-color: transparent; } }
 }
