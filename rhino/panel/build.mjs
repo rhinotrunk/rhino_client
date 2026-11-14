@@ -24,7 +24,8 @@ function options(preview) {
     target: ['es2022'],
     outdir: dist,
     entryNames: stem,
-    define: { __PREVIEW__: JSON.stringify(preview) },
+    define: { __PREVIEW__: serve ? '__RHINOCLIENT_PREVIEW__' : JSON.stringify(preview) },
+    banner: serve ? { js: 'const __RHINOCLIENT_PREVIEW__ = location.pathname === "/panel.html";' } : undefined,
     minify: !serve,
     sourcemap: serve ? 'inline' : false,
     plugins: [{
@@ -36,14 +37,20 @@ function options(preview) {
             readFile(join(dist, `${stem}.js`), 'utf8'),
             readFile(join(dist, `${stem}.css`), 'utf8'),
           ]);
-          await writeFile(join(dist, `${stem}.html`), `<!doctype html>
+          const html = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>RhinoClient</title>
 <style>${css}</style>
-</head><body><main id="root"></main><script>${js}</script></body></html>`);
+</head><body><main id="root"></main><script>${js}</script>${serve
+  ? '<script>new EventSource("/esbuild").addEventListener("change", () => location.reload());</script>'
+  : ''}</body></html>`;
+          await writeFile(join(dist, `${stem}.html`), html);
+          // Both development pages use the same build so the reload event is
+          // sent only after both pages have been updated.
+          if (serve) await writeFile(join(dist, 'panel.html'), html);
         });
       },
     }],
@@ -51,10 +58,12 @@ function options(preview) {
 }
 
 if (serve) {
-  const context = await esbuild.context(options(true));
+  const context = await esbuild.context(options(false));
   await context.watch();
   await context.serve({ servedir: dist, host: '127.0.0.1', port: 5173 });
   console.log('Panel preview: http://127.0.0.1:5173/panel.html');
+  console.log('Rhino panel: http://127.0.0.1:5173/panel.host.html');
+  console.log('TypeScript and CSS edits automatically reload both pages.');
 } else {
   await esbuild.build(options(true));
   await esbuild.build(options(false));

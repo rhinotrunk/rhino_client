@@ -23,6 +23,14 @@ public sealed class ClientPanel : Panel
         Content = view;
         Padding = 4;
 
+#if DEBUG
+        if (Environment.GetEnvironmentVariable("RHINOCLIENT_DEV") == "1")
+        {
+            view.Url = new Uri("http://127.0.0.1:5173/panel.host.html");
+            return;
+        }
+#endif
+
         using var stream = typeof(ClientPanel).Assembly.GetManifestResourceStream("RhinoClient.panel.html")
             ?? throw new InvalidOperationException("The embedded panel is missing. Rebuild RhinoClient.");
         using var reader = new StreamReader(stream);

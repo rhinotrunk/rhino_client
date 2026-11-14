@@ -1,7 +1,46 @@
+# .NET build output and local IDE state
 **/bin/
 **/obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+
+# JavaScript dependencies and generated panel bundles
 **/node_modules/
 rhino/panel/dist/
+.npm/
+*.tsbuildinfo
+
+# Local configuration and secrets (keep shareable templates)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# Packages, test output, browser artifacts, and logs
+*.rhp
+*.yak
+*.nupkg
+*.snupkg
+artifacts/
+TestResults/
+coverage/
 output/
 .playwright-cli/
+playwright-report/
+test-results/
+*.log
+
+# OS and editor temporary files
 .DS_Store
+._*
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*~

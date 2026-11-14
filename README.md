@@ -34,7 +34,19 @@ Output: `rhino/plugin/bin/Debug/net8.0/RhinoClient.rhp`. For a release build, ru
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild automatically; refresh the page to see them. Preview mode simulates the host response so the button works without Rhino. `npm run typecheck` checks TypeScript independently.
+Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates the host response so the button works without Rhino. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
+
+## Live reload inside Rhino
+
+Build the Debug plugin once with `npm run build`. Start `npm run dev` in one terminal, then run this in another:
+
+```sh
+npm run start:dev
+```
+
+Run `RhinoClient` in the new Rhino instance. This Debug-only mode loads <http://127.0.0.1:5173/panel.host.html> with the real Rhino bridge. Saving TypeScript or CSS automatically rebuilds and reloads the panel without restarting Rhino. Reloads reset JavaScript state; the C# click count is sent back when the page reconnects. C# changes still require a rebuild and Rhino restart.
+
+Keep the dev server running while using this mode. Regular `npm start` uses the embedded UI, and Release builds always use the embedded UI.
 
 Production uses a separate `panel.host.html`, embedded in the plugin. It never substitutes a simulated host if Rhino's bridge is unavailable. No web server or Node.js process is needed inside Rhino.
 
@@ -64,3 +76,5 @@ scripts/                             build and development launch helpers
 TypeScript sends `ready` and `button.click`. C# replies with `state` and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
+
+Build output, dependencies, packages, logs, local environment files, and editor caches are excluded by `.gitignore`. Keep source files, `package-lock.json`, `.env.example` templates, and the shared `.vscode` configuration in Git.

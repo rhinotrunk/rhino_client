@@ -9,6 +9,7 @@
     "build:release": "node scripts/build.mjs --release",
     "dev": "npm --prefix rhino/panel run dev",
     "typecheck": "npm --prefix rhino/panel run typecheck",
-    "start": "node scripts/launch.mjs"
+    "start": "node scripts/launch.mjs",
+    "start:dev": "node scripts/launch.mjs --dev"
   }
 }
