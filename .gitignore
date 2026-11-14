@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+**/node_modules/
+rhino/panel/dist/
+output/
+.playwright-cli/
+.DS_Store

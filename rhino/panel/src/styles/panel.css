@@ -1,0 +1,49 @@
+:root {
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+  --background: #f3f3f3;
+  --text: #252525;
+  --muted: #666;
+  --button: #fff;
+  --border: #b8b8b8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-scheme="light"]) {
+    --background: #2a2a2a;
+    --text: #ededed;
+    --muted: #aaa;
+    --button: #373737;
+    --border: #626262;
+  }
+}
+
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #2a2a2a;
+  --text: #ededed;
+  --muted: #aaa;
+  --button: #373737;
+  --border: #626262;
+}
+
+:root[data-scheme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--text); }
+main { padding: 16px; }
+button {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--button);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover:enabled { border-color: #5076a2; }
+button:active:enabled { transform: translateY(1px); }
+button:focus-visible { outline: 2px solid #5076a2; outline-offset: 3px; }
+button:disabled { opacity: .5; cursor: default; }
+p { margin: 10px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }

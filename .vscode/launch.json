@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "RhinoClient — Rhino 8",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build RhinoClient",
+      "program": "/Applications/Rhino 8.app/Contents/MacOS/Rhinoceros",
+      "args": ["-nosplash"],
+      "windows": {
+        "program": "C:\\Program Files\\Rhino 8\\System\\Rhino.exe",
+        "args": ["/netcore", "/nosplash"]
+      },
+      "env": { "RHINO_PACKAGE_DIRS": "${workspaceFolder}/rhino/plugin/bin/Debug/net8.0" },
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Attach to Rhino",
+      "type": "coreclr",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    }
+  ]
+}

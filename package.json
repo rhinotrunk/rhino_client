@@ -1,0 +1,14 @@
+{
+  "name": "rhino-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npm --prefix rhino/panel ci",
+    "build": "node scripts/build.mjs",
+    "build:release": "node scripts/build.mjs --release",
+    "dev": "npm --prefix rhino/panel run dev",
+    "typecheck": "npm --prefix rhino/panel run typecheck",
+    "start": "node scripts/launch.mjs"
+  }
+}
