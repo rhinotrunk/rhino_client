@@ -22,6 +22,7 @@
   <ItemGroup>
     <!-- Compile against the Rhino 8 API; Rhino supplies these assemblies at runtime. -->
     <PackageReference Include="RhinoCommon" Version="8.19.25132.1001" ExcludeAssets="runtime" />
+    <ProjectReference Include="../../../git_engine/src/RhinoTrunk.Client/RhinoTrunk.Client.csproj" />
     <EmbeddedResource Include="../panel/dist/panel.host.html" LogicalName="RhinoClient.panel.html" />
     <EmbeddedResource Include="Resources/panel.svg" LogicalName="RhinoClient.panel.svg" />
   </ItemGroup>
