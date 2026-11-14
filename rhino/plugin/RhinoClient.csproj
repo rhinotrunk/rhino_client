@@ -13,6 +13,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(ProgramW6432)\Rhino 8\System\Rhino.exe')">
+    <StartProgram>$(ProgramW6432)\Rhino 8\System\Rhino.exe</StartProgram>
+    <StartArguments>/netcore /nosplash</StartArguments>
+    <StartAction>Program</StartAction>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
   <ItemGroup>
     <!-- Compile against the Rhino 8 API; Rhino supplies these assemblies at runtime. -->
     <PackageReference Include="RhinoCommon" Version="8.19.25132.1001" ExcludeAssets="runtime" />
@@ -20,6 +26,7 @@
     <EmbeddedResource Include="Resources/panel.svg" LogicalName="RhinoClient.panel.svg" />
   </ItemGroup>
   <Target Name="BuildPanel" BeforeTargets="PrepareForBuild">
-    <Exec Command="node build.mjs" WorkingDirectory="$(MSBuildProjectDirectory)/../panel" />
+    <!-- Pass the script path. cmd.exe cannot use this repo's UNC working directory. -->
+    <Exec Command="node &quot;$(MSBuildThisFileDirectory)..\panel\build.mjs&quot;" />
   </Target>
 </Project>

@@ -6,11 +6,11 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build RhinoClient",
-      "program": "/Applications/Rhino 8.app/Contents/MacOS/Rhinoceros",
-      "args": ["-nosplash"],
-      "windows": {
-        "program": "C:\\Program Files\\Rhino 8\\System\\Rhino.exe",
-        "args": ["/netcore", "/nosplash"]
+      "program": "C:\\Program Files\\Rhino 8\\System\\Rhino.exe",
+      "args": ["/netcore", "/nosplash"],
+      "osx": {
+        "program": "/Applications/Rhino 8.app/Contents/MacOS/Rhinoceros",
+        "args": ["-nosplash"]
       },
       "env": { "RHINO_PACKAGE_DIRS": "${workspaceFolder}/rhino/plugin/bin/Debug/net8.0" },
       "cwd": "${workspaceFolder}",
