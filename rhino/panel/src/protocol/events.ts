@@ -51,6 +51,8 @@ export type HostEvent =
   | { type: 'graph'; repo: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
   | { type: 'status'; message: string; error: boolean; busy: boolean }
   | { type: 'checkout.unpushed'; commit: string; changes: number }
+  // A push stopped because the model's base commit is not the branch tip. The panel offers another branch.
+  | { type: 'push.detached'; commit: string }
   | { type: 'theme'; scheme: 'light' | 'dark' };
 
 export function newId(): string {

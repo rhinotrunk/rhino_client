@@ -48,12 +48,18 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   const [listedBranchServer, setListedBranchServer] = useState("");
   const [listedBranchRepo, setListedBranchRepo] = useState("");
   const [unpushed, setUnpushed] = useState<{ commit: string; changes: number } | null>(null);
+  const [detached, setDetached] = useState<{ commit: string } | null>(null);
+  const [newBranch, setNewBranch] = useState("");
+  const branchRef = useRef(branch);
+  branchRef.current = branch;
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
   const repoRequest = useRef("");
   const branchRequest = useRef({ server: "", repo: "" });
   const hostRef = useRef<HTMLDivElement>(null);
   const checkoutRef = useRef<(id: string) => void>(() => {});
   const unpushedId = useId();
+  const detachedId = useId();
+  const newBranchId = useId();
   const disabled = !ready || busy;
 
   useLayoutEffect(() => {
@@ -100,6 +106,9 @@ export function Panel({ bridge }: { bridge: Bridge }) {
         setStatus(event.message);
       } else if (event.type === "checkout.unpushed") {
         setUnpushed({ commit: event.commit, changes: event.changes });
+      } else if (event.type === "push.detached") {
+        setDetached({ commit: event.commit });
+        setNewBranch(`${branchRef.current.trim() || "branch"}-${shortHash(event.commit)}`);
       }
     });
   }, [bridge, connected]);
@@ -194,6 +203,7 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   function onPull() {
     const spec = snapshot();
     setUnpushed(null);
+    setDetached(null);
     setBusy(true);
     setError(false);
     setStatus("Pulling…");
@@ -204,6 +214,7 @@ export function Panel({ bridge }: { bridge: Bridge }) {
     if (!ready || busy) return;
     const spec = snapshot();
     setUnpushed(null);
+    setDetached(null);
     setBusy(true);
     setError(false);
     setStatus("Checking out…");
@@ -218,13 +229,31 @@ export function Panel({ bridge }: { bridge: Bridge }) {
     setStatus("Checkout cancelled. The model was not changed.");
   }
 
-  function onPush() {
+  function push(target: string) {
     const spec = snapshot();
     setUnpushed(null);
+    setDetached(null);
     setBusy(true);
     setError(false);
     setStatus("Pushing…");
-    bridge.send({ type: "push", ...spec, branch: branch.trim(), message: message.trim() });
+    bridge.send({ type: "push", ...spec, branch: target, message: message.trim() });
+  }
+
+  function onPush() {
+    push(branch.trim());
+  }
+
+  function pushToNewBranch() {
+    const name = newBranch.trim();
+    if (!name || name === branch.trim()) return;
+    setBranch(name);
+    push(name);
+  }
+
+  function cancelDetached() {
+    setDetached(null);
+    setError(false);
+    setStatus("Push cancelled. Nothing was pushed and the model was not changed.");
   }
 
   const note = historyNote(history, requestedRepo, ready);
@@ -289,6 +318,44 @@ export function Panel({ bridge }: { bridge: Bridge }) {
                   Discard and check out
                 </Button>
                 <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={cancelCheckout}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : detached ? (
+            <div role="alertdialog" aria-labelledby={detachedId} className="grid gap-2 rounded-md border p-2">
+              <p id={detachedId} className="text-sm wrap-anywhere">
+                The model is at {shortHash(detached.commit)}, which is not the latest commit on {branch.trim() || "the branch"}.
+                Git can only push to the tip of a branch. Push the changes to another branch instead?
+              </p>
+              <div className="grid gap-1">
+                <Label htmlFor={newBranchId} className="text-muted-foreground">New branch</Label>
+                <Input
+                  id={newBranchId}
+                  className="h-8"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={newBranch}
+                  onChange={(event) => setNewBranch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      pushToNewBranch();
+                    }
+                  }}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="flex-1"
+                  disabled={disabled || !newBranch.trim() || newBranch.trim() === branch.trim()}
+                  onClick={pushToNewBranch}
+                >
+                  Push to new branch
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={cancelDetached}>
                   Cancel
                 </Button>
               </div>

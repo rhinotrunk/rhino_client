@@ -188,7 +188,8 @@ public sealed class ClientPanel : Panel
         {
             var result = await action(_unload.Token);
             _busy = false;
-            SendStatus(result.Message, !result.Ok && result.Unpushed == 0, false);
+            if (result.Detached is { } detached) Post(new { type = "push.detached", commit = detached });
+            SendStatus(result.Message, !result.Ok && !result.Asking, false);
             return result;
         }
         catch (OperationCanceledException)

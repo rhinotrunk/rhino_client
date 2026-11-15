@@ -14,9 +14,19 @@ public sealed record SyncResult(bool Ok, string Message)
     /// <summary>Unpushed changes that stopped a checkout before it changed anything. The caller asks whether to push or discard them.</summary>
     public int Unpushed { get; init; }
 
+    /// <summary>
+    /// The base commit of a push that stopped because it is not the branch tip, like a detached HEAD in git.
+    /// The caller asks whether to push to another branch instead.
+    /// </summary>
+    public string? Detached { get; init; }
+
+    /// <summary>Stopped to ask the user something rather than failed.</summary>
+    public bool Asking => Unpushed > 0 || Detached is not null;
+
     public static SyncResult Success(string message) => new(true, message);
     public static SyncResult Fail(string message) => new(false, message);
     public static SyncResult Stopped(int unpushed, string message) => new(false, message) { Unpushed = unpushed };
+    public static SyncResult OffTip(string commit, string message) => new(false, message) { Detached = commit };
 }
 
 /// <summary>What a checkout does with changes that have not been pushed. Checkout replaces the model, so they would be lost.</summary>
@@ -151,6 +161,12 @@ public sealed class GeometrySync : IDisposable
             }
 
             if (captured.Changes.Count == 0) return NothingToCommit(captured, created);
+            if (remote is not null && !string.Equals(remote.Commit, _copy.BaseCommit, StringComparison.Ordinal))
+            {
+                var described = captured.Changes.Count == 1 ? "1 change" : $"{captured.Changes.Count} changes";
+                return SyncResult.OffTip(_copy.BaseCommit, $"This model is at {ShortCommit(_copy.BaseCommit)}, which is not the latest commit on '{bound.Branch}'. A push can only add to the tip of a branch, so push the {described} to another branch.");
+            }
+
             expectedHead = _copy.BaseCommit;
         }
 
@@ -322,6 +338,7 @@ public sealed class GeometrySync : IDisposable
                     push = Describe(ex);
                 }
 
+                if (push.Detached is not null) return push with { Message = "Checkout stopped. " + push.Message };
                 if (!push.Ok) return SyncResult.Fail("Checkout stopped because the push failed. " + push.Message);
                 pushed = push.Message + " ";
             }
