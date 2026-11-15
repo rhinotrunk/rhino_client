@@ -66,6 +66,88 @@ public sealed partial class GeometrySync
         IReadOnlyCollection<string>? focusLayers = null, string? clearHint = null) =>
         Run(() => CompareCore(current, options, at, mode, interactive, cancellationToken, focusLayers, clearHint), cancellationToken);
 
+    /// <summary>Tag of a scene showing an agent task's result, so clearing that preview leaves other previews alone.</summary>
+    internal const string TaskSceneTag = "task";
+
+    /// <summary>
+    /// Shows an agent task's result the way commit and merge previews look: against the snapshot the task started
+    /// from, added objects green, modified blue (the model's version hidden), removed as red ghosts, each with the
+    /// same fill, GLSL outline and info card. Objects the task did not touch are the model's own, drawn as usual.
+    /// Without a snapshot every object of the result is drawn neutral over a hidden model. Call on the UI thread.
+    /// </summary>
+    /// <param name="baseline">Geometry of the starting snapshot by object id; null when there is none.</param>
+    /// <param name="hud">The card's title and detail lines; the counts and a hint are added below them.</param>
+    internal static (int Added, int Modified, int Removed) ShowTaskResult(
+        RhinoDoc source, RhinoDoc result, IReadOnlyDictionary<Guid, GeometryBase>? baseline, IReadOnlyList<string> hud, bool zoom)
+    {
+        var scene = new PreviewScene { Tag = TaskSceneTag };
+        int added = 0, modified = 0, removed = 0;
+        var live = result.Objects.Where(obj => !obj.IsDeleted && !obj.IsHidden).ToList();
+        if (baseline is null)
+        {
+            foreach (var obj in source.Objects.Where(obj => !obj.IsDeleted)) scene.Hidden.Add(obj.Id);
+            foreach (var obj in live) AddShape(scene, obj.Geometry, Tint(NeutralColor, 0.6), NeutralColor, 0, Transform.Identity);
+        }
+        else
+        {
+            var seen = new HashSet<Guid>();
+            foreach (var obj in live)
+            {
+                seen.Add(obj.Id);
+                if (!baseline.TryGetValue(obj.Id, out var before))
+                {
+                    added++;
+                    AddShape(scene, obj.Geometry, Tint(AddedColor), AddedColor, 0, Transform.Identity);
+                }
+                else if (!SameGeometry(before, obj.Geometry))
+                {
+                    modified++;
+                    scene.Hidden.Add(obj.Id);
+                    AddShape(scene, obj.Geometry, Tint(ModifiedColor), ModifiedColor, 0, Transform.Identity);
+                }
+            }
+
+            foreach (var (id, before) in baseline)
+            {
+                if (seen.Contains(id)) continue;
+                removed++;
+                scene.Hidden.Add(id);
+                AddShape(scene, before, NeutralColor, RemovedColor, GhostTransparency, Transform.Identity);
+            }
+        }
+
+        foreach (var item in scene.Items)
+            scene.Bounds = Union(scene.Bounds, item.Mesh?.GetBoundingBox(false) ?? item.Curve?.GetBoundingBox(false) ?? BoundingBox.Empty);
+        var lines = hud.ToList();
+        lines.Add(baseline is null
+            ? "No starting snapshot to compare with: showing the task's whole copy."
+            : "Against the snapshot it started from: " + Legend(added, modified, removed));
+        lines.Add("Open a pull request or merge it from the Agents tab; select another task to compare.");
+        scene.Hud = lines;
+        Show(source, scene);
+        if (zoom && scene.Bounds.IsValid) source.Views.ActiveView?.ActiveViewport.ZoomBoundingBox(scene.Bounds);
+        source.Views.Redraw();
+        return (added, modified, removed);
+    }
+
+    private static bool SameGeometry(GeometryBase before, GeometryBase after)
+    {
+        try
+        {
+            return GeometryBase.GeometryEquals(before, after);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Removes an agent task's preview, if that is what the viewport is showing.</summary>
+    internal static void ClearTaskPreview()
+    {
+        if (PreviewConduit.Current?.Scene?.Tag == TaskSceneTag) ClearPreview();
+    }
+
     /// <summary>Removes any merge or compare preview from the viewport.</summary>
     public static void ClearPreview()
     {

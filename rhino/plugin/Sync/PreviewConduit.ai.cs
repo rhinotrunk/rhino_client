@@ -280,6 +280,8 @@ internal sealed class PreviewScene
     internal HashSet<Guid> Hidden { get; } = new();
     internal BoundingBox Bounds { get; set; } = BoundingBox.Empty;
     internal IReadOnlyList<string> Hud { get; set; } = Array.Empty<string>();
+    /// <summary>Who put the scene up (for example an agent task preview), so it can be cleared without touching others.</summary>
+    internal string? Tag { get; init; }
     /// <summary>Document objects drawn again with a transform (side-by-side comparisons).</summary>
     internal List<(Guid ObjectId, Transform Transform)> Copies { get; } = new();
     internal List<PreviewLabel> Labels { get; } = new();
