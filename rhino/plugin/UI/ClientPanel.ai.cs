@@ -97,6 +97,9 @@ public sealed class ClientPanel : Panel
                 case "task.merge":
                     MergeTask(Text(command, "id"));
                     break;
+                case "task.pr.open":
+                    OpenPullRequest(Text(command, "id"));
+                    break;
                 default:
                     await _control.Command(command);
                     break;
@@ -154,6 +157,43 @@ public sealed class ClientPanel : Panel
             {
                 // Never let an exception escape a UI-thread action: it aborts Rhino on macOS.
                 RhinoApp.WriteLine("RhinoClient: could not record the merge result (" + ex.Message + ").");
+            }
+        });
+    }
+
+    // Opens a pull request for a finished task: its result goes onto its own agent branch and waits for review.
+    private async void OpenPullRequest(string id)
+    {
+        if (!_control.TryBeginPullRequest(id, out var request, out var problem))
+        {
+            _bridge.Post(new { type = "control.error", message = problem });
+            return;
+        }
+
+        var branch = TaskBranch.Name(request);
+        var baseBranch = "";
+        SyncResult result;
+        try
+        {
+            var target = _sync.ReadTarget();
+            baseBranch = target.Branch;
+            result = await RunAsync($"Opening a pull request for {request.Title}…", token => _sync.OpenPullRequestAsync(target, request, token));
+        }
+        catch (Exception ex)
+        {
+            result = SyncResult.Fail(ex.Message);
+        }
+
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            try
+            {
+                _control.FinishPullRequest(id, result.Ok, result.Message, branch, baseBranch);
+                if (!result.Ok) _bridge.Post(new { type = "control.error", message = result.Message });
+            }
+            catch (Exception ex)
+            {
+                RhinoApp.WriteLine("RhinoClient: could not record the pull request (" + ex.Message + ").");
             }
         });
     }
@@ -252,11 +292,13 @@ public sealed class ClientPanel : Panel
         {
             var graph = await _sync.LoadGraphAsync(server, requested, _unload.Token);
             if (_closed || generation != _graphGeneration) return;
+            var head = await OnUiAsync(() => _sync.ReadBase());
             Post(new
             {
                 type = "graph",
                 repo = requested,
                 truncated = graph.Truncated,
+                head = head ?? "",
                 error = false,
                 message = "",
                 commits = graph.Commits.Select(commit => new
@@ -287,6 +329,17 @@ public sealed class ClientPanel : Panel
                 commits = Array.Empty<object>(),
             });
         }
+    }
+
+    private static Task<T> OnUiAsync<T>(Func<T> action)
+    {
+        var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            try { done.SetResult(action()); }
+            catch (Exception ex) { done.SetException(ex); }
+        });
+        return done.Task;
     }
 
     private void Post(object message)

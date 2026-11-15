@@ -24,6 +24,7 @@
   --border: hsl(0 0% 80%);
   --input: hsl(0 0% 72%);
   --ring: hsl(211 46% 45%);
+  --agent: #7c3aed;
 }
 
 .dark {
@@ -45,6 +46,7 @@
   --border: hsl(0 0% 32%);
   --input: hsl(0 0% 38%);
   --ring: hsl(211 58% 66%);
+  --agent: #a78bfa;
 }
 
 @theme inline {
@@ -92,19 +94,14 @@
   }
 }
 
-.history svg {
-  display: block;
-  max-width: none;
-  height: auto;
-}
 
 /* Agent workbench styles live in their own layer: above Tailwind's base reset, below its utilities,
    so the shadcn components used by the Repository tab keep their utility styling. */
 @layer agents {
 .agents { color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100%; }
 /* A modeling workbench: quiet surfaces, connected task rows, and a single blue selection. */
-:root { --panel: #fff; --soft: #f0f2f5; --ink: #253140; --line: #dce0e6; --subtle: #677483; --blue: #35649a; --selected: #e8eff8; --good: #36715a; --bad: #ad3f46; }
-:root.dark { --panel: #292c30; --soft: #24272a; --ink: #e4e8ed; --line: #42474e; --subtle: #a7afb9; --blue: #9bbfe9; --selected: #35465b; --good: #95c3a9; --bad: #f0a0a6; }
+:root { --panel: var(--card); --soft: var(--background); --ink: var(--foreground); --line: var(--border); --subtle: var(--muted-foreground); --blue: var(--primary); --selected: var(--accent); --good: #36715a; --bad: #ad3f46; }
+:root.dark { --good: #95c3a9; --bad: #f0a0a6; }
 * { box-sizing: border-box; }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
@@ -348,49 +345,12 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .session-plan-row { padding: 6px 10px; overflow: visible; }
 .session-return { text-align: left; color: var(--blue); }
 /* One-click merge for finished tasks, and a highlight that spans the row's "..." menu. */
-.merge-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 26px; height: 26px; margin-right: 2px; border-radius: 4px; color: var(--blue); border: 1px solid var(--blue); }
-.merge-button:hover:not(:disabled) { background: var(--blue); color: var(--panel); }
+.merge-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 26px; height: 26px; margin-right: 2px; border-radius: 4px; color: var(--agent); }
+.merge-button:hover:not(:disabled) { background: color-mix(in srgb, var(--agent) 22%, transparent); }
 .merged-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-right: 6px; font-size: 11px; color: var(--good); }
 .session-nav-line { border-radius: 5px; }
 .session-nav-line.selected { background: var(--selected); color: var(--blue); }
 .session-nav-line .session-nav { background: transparent; }
 }
 
-.history .commit-hit {
-  fill: transparent;
-  pointer-events: all;
-}
 
-.history .commit-checkout {
-  opacity: 0;
-  pointer-events: none;
-  cursor: pointer;
-  outline: none;
-}
-
-.history:not(.is-busy) .commit-entry:hover .commit-row.is-placed .commit-checkout,
-.history:not(.is-busy) .commit-row.is-placed:hover .commit-checkout,
-.history:not(.is-busy) .commit-row.is-placed .commit-checkout:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.history .commit-checkout rect {
-  fill: var(--secondary);
-  stroke: var(--border);
-  stroke-width: 1;
-}
-
-.history .commit-checkout:focus-visible rect {
-  stroke: var(--ring);
-}
-
-.history .commit-checkout text {
-  fill: var(--secondary-foreground);
-  font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  pointer-events: none;
-}
-
-.history .commit-checkout:hover rect {
-  fill: var(--accent);
-}

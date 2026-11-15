@@ -18,7 +18,6 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@gitgraph/js": "1.4.0",
     "@radix-ui/react-label": "2.1.17",
     "@radix-ui/react-scroll-area": "1.4.0",
     "@radix-ui/react-slot": "1.5.0",

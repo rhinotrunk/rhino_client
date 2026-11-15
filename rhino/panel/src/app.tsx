@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, ChevronRight, Circle, GitBranch, GitMerge, Layers, ListTree, Loader2, MessageSquare, Plus, Settings2, Square, MoreHorizontal, Play, Pause, Archive, ArchiveRestore, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, GitPullRequest, ChevronDown, ChevronRight, Circle, GitBranch, GitMerge, Layers, ListTree, Loader2, MessageSquare, Plus, Settings2, Square, MoreHorizontal, Play, Pause, Archive, ArchiveRestore, Trash2, X } from 'lucide-react';
 import type { Bridge } from './protocol/bridge';
 import type { Activity, AgentTask, ControlState, Scope, Settings, TaskStatus, ModelingSession } from './protocol/events';
 import { budgetModel, newId } from './protocol/events';
 
-const labels: Record<TaskStatus, string> = { draft: 'Not launched', queued: 'Queued for worker', running: 'Running', stopping: 'Stopping', stopped: 'Stopped', ready: 'PR ready', failed: 'Failed', interrupted: 'Interrupted' };
+const labels: Record<TaskStatus, string> = { draft: 'Not launched', queued: 'Queued for worker', running: 'Running', stopping: 'Stopping', stopped: 'Stopped', ready: 'Ready for review', failed: 'Failed', interrupted: 'Interrupted' };
 const emptyScope = (): Scope => ({ objectIds: [], layerIds: [] });
 function Status({ status, label }: { status: TaskStatus; label?: string }) {
   return <span className={`status status-${status}`}>{status === 'running' || status === 'stopping' ? <Loader2 className="spin" size={12} /> : status === 'ready' ? <Check size={12} /> : <Circle size={8} fill="currentColor" />} {label ?? labels[status]}</span>;
@@ -33,7 +33,7 @@ function ActivityList({ entries, activity }: { entries: Activity[]; activity: bo
     </div>)}<div ref={end} />
   </div>;
 }
-export function App({ bridge }: { bridge: Bridge }) {
+export function App({ bridge, settingsOpen, onSettingsClose }: { bridge: Bridge; settingsOpen: boolean; onSettingsClose: () => void }) {
   const [state, setState] = useState<ControlState>();
   const [selected, setSelected] = useState('sessions');
   const [tab, setTab] = useState<'conversation' | 'activity' | 'scope'>('conversation');
@@ -45,7 +45,6 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [scope, setScope] = useState<Scope>(emptyScope);
   const [description, setDescription] = useState('');
   const [reply, setReply] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings>({ codexPath: 'codex', model: budgetModel, concurrency: 2 });
   const [taskSessionId, setTaskSessionId] = useState('');
   const [parentId, setParentId] = useState('');
@@ -68,6 +67,7 @@ export function App({ bridge }: { bridge: Bridge }) {
     });
     bridge.send({ type: 'ready' }); return unsubscribe;
   }, [bridge]);
+  useEffect(() => { if (settingsOpen && state) setSettings(state.settings); }, [settingsOpen]);
   const task = state?.tasks.find(t => t.id === selected);
   const session = state?.sessions.find(s => s.id === (task?.sessionId ?? (selected.startsWith('session:') ? selected.slice(8) : selected === 'new-task' ? taskSessionId : '')));
   useEffect(() => {
@@ -98,6 +98,7 @@ export function App({ bridge }: { bridge: Bridge }) {
   const waitingLabel = (node: AgentTask): string => {
     if (node.archived) return 'Archived';
     if (node.paused) return node.status === 'stopping' ? 'Pausing…' : 'Paused';
+    if (node.status === 'ready' && node.prBranch && !node.mergedBranch) return 'PR open';
     if (node.status !== 'queued' || node.inputPath) return labels[node.status];
     const parent = state.tasks.find(t => t.id === node.parentId);
     if (!parent || parent.status === 'ready') return labels.queued;
@@ -110,7 +111,10 @@ export function App({ bridge }: { bridge: Bridge }) {
     {node.paused || ['stopped', 'interrupted', 'failed'].includes(node.status) ? <button className="icon-button" aria-label={`Resume ${node.title}`} title="Resume task" onClick={() => send({ type: 'task.resume', id: node.id })}><Play size={13} /></button> : node.status === 'draft' ? <button className="icon-button" aria-label={`Run ${node.title}`} title="Run task" onClick={() => send({ type: 'task.launch', id: node.id })}><Play size={13} /></button> : null}
     {node.status === 'ready' && (node.mergedBranch
       ? <span className="merged-chip" title={`Merged via ${node.mergedBranch}`}><Check size={12} aria-hidden="true" />Merged</span>
-      : <button className="merge-button" disabled={node.merging} aria-label={`Merge ${node.title}`} title={node.merging ? 'Merging…' : "Merge into the branch this model is on (main by default): saves the result on its own agent branch, merges it, then pulls it into the model"} onClick={() => send({ type: 'task.merge', id: node.id })}>{node.merging ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <GitMerge size={14} aria-hidden="true" />}</button>)}
+      : node.prBranch
+        ? <><button className="merge-button" disabled={node.merging} aria-label={`Merge ${node.title}`} title={node.merging ? 'Merging…' : `Merge ${node.prBranch} into ${node.prBase ?? 'the model branch'} and pull it into the model`} onClick={() => send({ type: 'task.merge', id: node.id })}>{node.merging ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <GitMerge size={14} aria-hidden="true" />}</button>
+          <button className="icon-button" disabled={node.merging} aria-label={`Close pull request for ${node.title}`} title="Close pull request without merging" onClick={() => send({ type: 'task.pr.close', id: node.id })}><X size={13} /></button></>
+        : <button className="merge-button" disabled={node.opening} aria-label={`Open pull request for ${node.title}`} title={node.opening ? 'Opening…' : 'Commit this result to its own branch and open a pull request'} onClick={() => send({ type: 'task.pr.open', id: node.id })}>{node.opening ? <Loader2 size={14} className="spin" aria-hidden="true" /> : <GitPullRequest size={14} aria-hidden="true" />}</button>)}
     <details className="row-menu" onClick={event => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.open = false; }}><summary aria-label={`Actions for ${node.title}`} title="Task actions"><MoreHorizontal size={15} /></summary><div>
       <button onClick={() => addTask(node)}><Plus size={14} aria-hidden="true" />Add task</button>
       <button disabled={node.status !== 'ready'} onClick={() => addTask(node, true)}><GitBranch size={14} aria-hidden="true" />Branch out</button>
@@ -139,7 +143,6 @@ export function App({ bridge }: { bridge: Bridge }) {
     </div>
   </section> : null;
   return <div className="control-plane">
-    <header className="workspace-header"><div className="workspace-brand"><ListTree size={20} /><div><h1>RhinoClient</h1><span className="document-name">{state.document || 'Untitled model'}</span></div></div><div className="header-actions"><span className={`connection ${bridge.kind === 'preview' ? 'preview' : ''}`}>{bridge.kind === 'preview' ? 'Simulated preview' : 'Rhino connected'}</span><button className="icon-button" aria-label="Worker settings" onClick={() => { setSettings(state.settings); setShowSettings(true); }}><Settings2 size={17} /></button></div></header>
     {bridge.kind === 'preview' && <div className="preview-banner">Browser preview simulates agents and geometry. Real workers run inside Rhino.</div>}
     {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={15} /></button></div>}
     <div className="workspace-body">
@@ -175,7 +178,9 @@ export function App({ bridge }: { bridge: Bridge }) {
           <div className="execution-layout"><div className="execution-chat">{planCard}<div className="inspector-content">
             {!task && session.isPlanning && <div className="notice"><Loader2 size={13} className="spin" /> Orchestrator is preparing tasks and dependencies…</div>}
             {task?.status === 'queued' && <div className="notice">{upstream && upstream.status !== 'ready' ? waitingLabel(task) : 'Waiting for an available worker.'}</div>}
-            {task?.status === 'ready' && <div className="proposal-strip"><div><Check size={16} />Ready to merge <span className="muted">/ revision {task.revision}</span></div><button className="quiet" onClick={() => send({ type: 'task.show', id: task.id })}>Show in viewport</button><p>Use Merge on the task row to bring it into the model.{upstream ? ` Includes the unaccepted result of ${upstream.title}.` : ''}</p></div>}
+            {task?.status === 'ready' && <div className="proposal-strip"><div>{task.mergedBranch ? <Check size={16} /> : <GitPullRequest size={16} />}{task.mergedBranch ? 'Merged' : task.prBranch ? 'Pull request open' : 'Ready for review'} <span className="muted">/ revision {task.revision}</span></div>
+              {!task.mergedBranch && (task.prBranch ? <><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.merge', id: task.id })}><GitMerge size={13} />Merge</button><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.pr.close', id: task.id })}>Close PR</button></> : <button className="quiet" disabled={task.opening} onClick={() => send({ type: 'task.pr.open', id: task.id })}><GitPullRequest size={13} />Open PR</button>)}
+              <button className="quiet" onClick={() => send({ type: 'task.show', id: task.id })}>Show in viewport</button>{task.prBranch && !task.mergedBranch && <p>{task.prBranch} → {task.prBase ?? 'model branch'}.{upstream ? ` Includes the unaccepted result of ${upstream.title}.` : ''}</p>}</div>}
             {tab === 'scope' && task ? <div className="scope-details">{task.status === 'draft' ? <><label>Task name<input value={title} onChange={e => setTitle(e.target.value)} /></label><label>Instructions<textarea rows={5} value={instructions} onChange={e => setInstructions(e.target.value)} /></label><ScopePicker scope={draftScope} setScope={setDraftScope} state={state} capture={() => capture('draft')} /><button className="primary" disabled={!title.trim() || !instructions.trim()} onClick={() => send({ type: 'task.update', id: task.id, title, instructions, scope: draftScope })}>Save task</button></> : <><h3>Instructions</h3><p className="preserve">{task.instructions}</p><h3>Editable scope</h3><p>{task.scope.wholeDocument ? 'Whole task document copy' : `${task.scope.layerIds.length} layers, ${task.scope.objectIds.length} objects`}</p><ul>{task.scope.layerIds.map(id => <li key={id}>{state.layers.find(l => l.id === id)?.name ?? id}</li>)}</ul></>}<div className="task-facts"><h3>Execution</h3><dl><dt>Worker</dt><dd>Codex CLI</dd><dt>Model</dt><dd>{task.model ?? state.settings.model}</dd><dt>Reasoning</dt><dd>Low</dd><dt>Input tokens</dt><dd>{task.inputTokens.toLocaleString()}</dd><dt>Output tokens</dt><dd>{task.outputTokens.toLocaleString()}</dd></dl>{task.inputPath && <p className="file-path">Input: {task.inputPath}</p>}{task.workingPath && <button className="quiet" disabled={!!busy} onClick={() => send({ type: 'task.preview', id: task.id })}>Inspect saved copy</button>}</div></div> : <><ActivityList entries={task?.activity ?? session.conversation} activity={tab === 'activity'} />{task?.status === 'draft' && <div className="inspector-empty"><h3>Ready for review</h3><p>{task.instructions}</p><button className="quiet" onClick={() => setTab('scope')}>Review instructions and scope</button></div>}</>}
           </div>
           {tab !== 'scope' && <div className="composer-area">{task?.status === 'draft' ? <div className="draft-footer">Review this task, then run it individually or with its session.<button className="quiet" onClick={() => setTab('scope')}>Review details</button></div> : <form onSubmit={e => { e.preventDefault(); if (task) send({ type: 'task.message', id: task.id, message: reply }); else send({ type: 'session.message', id: session.id, prompt: reply }); setReply(''); }}><div className="composer"><textarea aria-label={task ? 'Task follow-up' : 'Session message'} rows={2} value={reply} onChange={e => setReply(e.target.value)} disabled={task ? !!busy || !!task.archived : session.isPlanning || !!session.archived} placeholder={task ? busy ? 'Wait for the task or stop it to send a follow-up…' : 'Refine this task…' : 'Discuss the plan or ask for more tasks…'} /><div className="composer-bottom"><span>{task ? 'Continues in this task’s copy' : 'New tasks stay in this session'} · {state.settings.model}</span><button className="send-button" aria-label="Send message" disabled={!reply.trim() || (task ? !!busy || !!task.archived : session.isPlanning || !!session.archived)}><ArrowUp size={18} /></button></div></div></form>}</div>}
@@ -183,6 +188,6 @@ export function App({ bridge }: { bridge: Bridge }) {
         </> : <div className="notice">Loading session…</div>}
       </section>
     </div>
-    {showSettings && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header><h2 id="settings-title">Worker settings</h2><button className="icon-button" aria-label="Close settings" onClick={() => setShowSettings(false)}><X size={18} /></button></header><form onSubmit={e => { e.preventDefault(); send({ type: 'settings.save', ...settings }); setShowSettings(false); }}><label>Codex executable<input required value={settings.codexPath} onChange={e => setSettings({ ...settings, codexPath: e.target.value })} /></label><p className="hint">Uses your existing Codex CLI sign-in. No API key is entered in the panel.</p><label>Model<select value={settings.model} onChange={e => setSettings({ ...settings, model: e.target.value })}><option value="gpt-6-luna">GPT-6 Luna — budget default</option><option value="gpt-6.1-terra">GPT-6.1 Terra — lower-cost 6.1</option></select></label><p className="hint">Low reasoning effort for planning and workers. No automatic upgrade to a more expensive model.</p><label>Concurrent task workers<select value={settings.concurrency} onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })}>{[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}</select></label><footer><button className="primary">Save settings</button></footer></form></section></div>}
+    {settingsOpen && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header><h2 id="settings-title">Worker settings</h2><button className="icon-button" aria-label="Close settings" onClick={() => onSettingsClose()}><X size={18} /></button></header><form onSubmit={e => { e.preventDefault(); send({ type: 'settings.save', ...settings }); onSettingsClose(); }}><label>Codex executable<input required value={settings.codexPath} onChange={e => setSettings({ ...settings, codexPath: e.target.value })} /></label><p className="hint">Uses your existing Codex CLI sign-in. No API key is entered in the panel.</p><label>Model<select value={settings.model} onChange={e => setSettings({ ...settings, model: e.target.value })}><option value="gpt-6-luna">GPT-6 Luna — budget default</option><option value="gpt-6.1-terra">GPT-6.1 Terra — lower-cost 6.1</option></select></label><p className="hint">Low reasoning effort for planning and workers. No automatic upgrade to a more expensive model.</p><label>Concurrent task workers<select value={settings.concurrency} onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })}>{[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}</select></label><footer><button className="primary">Save settings</button></footer></form></section></div>}
   </div>;
 }

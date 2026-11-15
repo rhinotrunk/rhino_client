@@ -13,7 +13,10 @@ A task owns its conversation, working document copy, editable scope, and agent w
 
 **Proposal**:
 An agent's suggested model changes submitted for human review. Completion of the producing **Task** does not mean the proposal has been accepted.
-_Avoid_: PR, pull request (informal analogies)
+Once opened for review it is a **Pull request**: the task's result on its own agent branch, awaiting a merge or close decision.
+
+**Pull request**:
+A task's saved result committed to its own agent branch and offered for merge into the model's branch. Opening one does not change the model; merging it does, and closing it leaves the model untouched.
 
 **Task plan**:
 A reviewable description of proposed **Tasks**, including their instructions and geometry scopes. The human can launch reviewed tasks together or individually; reviewing a plan does not accept the resulting **Proposals**.

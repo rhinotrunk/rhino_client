@@ -71,8 +71,18 @@ export function createPreview(emit: (e: HostEvent) => void) {
     switch (cmd.type) {
       case 'ready': publish(); return;
       case 'preview.clear': state.previewTaskId = null; publish(); return;
+      case 'task.pr.open':
+        if (task?.status === 'ready' && !task.mergedBranch && !task.prBranch) {
+          task.prBranch = 'agent/facade-a'; task.prBase = 'main'; task.prOpenedAt = new Date().toISOString();
+          task.activity.push(entry('status', 'Preview: opened a pull request, agent/facade-a into main.'));
+        }
+        publish(); return;
+      case 'task.pr.close':
+        if (task?.prBranch) { task.prBranch = null; task.prBase = null; task.prOpenedAt = null; }
+        publish(); return;
       case 'task.merge':
         if (task?.status === 'ready' && !task.mergedBranch) {
+          task.prBranch = null; task.prBase = null; task.prOpenedAt = null;
           task.mergedBranch = `agent/${task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${task.id.slice(0, 8)}-r${task.revision}`;
           task.mergedAt = new Date().toISOString();
           task.activity.push(entry('status', 'Preview: merged into the model via ' + task.mergedBranch + '.'));

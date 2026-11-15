@@ -1,16 +1,18 @@
 # RhinoClient
 
-A dockable Rhino panel with two tabs. **Repository** (first) is git-style version control for the model: pull, push, and a history graph. **Agents** (second) is the AI control plane: Codex workers propose changes to a copy of the model. Run **RhinoClient** in Rhino's command line to open the panel, or run **RhinoClientPull** and **RhinoClientPush** from the command line.
+A dockable Rhino panel with one sticky header and two tabs. The header holds the repository and branch, **Pull**, **Push**, refresh, an open pull request counter, and worker settings. **Graph** (first) is the commit history with a message row for the next push. **Agents** (second) is the AI control plane: Codex workers propose changes to a copy of the model. Run **RhinoClient** in Rhino's command line to open the panel, or run **RhinoClientPull** and **RhinoClientPush** from the command line.
 
-## Repository tab
+## Graph tab and header
 
-Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
+Click the repository chip in the header to set the server, repository, and branch. **Pull** checks the branch tip out into a document that has no model objects. **Push** commits settings, layers, and model geometry using the message typed in the dashed row at the top of the graph. The graph draws every branch; hover a commit and choose **Checkout** (or double-click it) to pull that commit. Agent commits are violet. Results of pull, push, and checkout are written to Rhino's command history and shown at the right of the header.
+
+Finished agent tasks wait above the history with **Open PR**. An open pull request shows on its agent branch as **Awaiting approval**, with Merge and Close right on the row. The header's pull request counter jumps to the first one.
 
 ## Agents tab
 
 Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
 
-“Ready to merge” means a saved local task result you can preview in the viewport. The preview compares the task's copy with the snapshot it started from: added objects are green, removed ones red, changed ones amber, and everything untouched grey. **Merge**, next to a finished task's “…” menu, uses the same sync pipeline as Push and Pull: it commits the result to its own `agent/…` branch (authored as an agent, branched from the commit the task started at), merges that branch into the model's branch with a merge commit (so history shows the task splitting off as one commit and joining back in), and pulls the merged result into the open model. The model must already be on a repository branch (push it from the Repository tab first), and it must have no unpushed changes, because the final pull makes the model match the merged commit: existing objects are updated in place and objects the commit no longer lists are removed (one undo step). If the merge conflicts, the task branch is kept for review. Opening a pull request and approval rules are not part of this yet. The source model is not changed by task workers.
+“Ready to merge” means a saved local task result you can preview in the viewport. The preview compares the task's copy with the snapshot it started from: added objects are green, removed ones red, changed ones amber, and everything untouched grey. **Open PR** (in the graph, or beside a finished task's “…” menu) commits the result to its own `agent/…` branch, authored as an agent and branched from the commit the task started at, and leaves it for review; the model is not changed. **Merge** on an open pull request uses the same sync pipeline as Push and Pull: it merges that branch into the model's branch with a merge commit (so history shows the task splitting off as one commit and joining back in), and pulls the merged result into the open model. The model must already be on a repository branch (push it from the Graph tab first), and it must have no unpushed changes, because the final pull makes the model match the merged commit: existing objects are updated in place and objects the commit no longer lists are removed (one undo step). If the merge conflicts, the task branch is kept for review. **Close** drops the pull request without merging and keeps the branch. Approval rules are not part of this yet. The source model is not changed by task workers.
 
 ## Try a session
 
@@ -98,7 +100,7 @@ rhino/
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
     src/main.tsx                     React entry and the Repository / Agents tab shell
-    src/panel.tsx                    Repository tab: pull, push, and history card
+    src/header.tsx, src/graph/        Sticky header, history graph, pull requests
     src/app.tsx                      Agents tab: session list, chat, task tree and execution controls
     src/graph/story.ts               oldest-first branch walk
     src/graph/render.ts              gitgraph drawing

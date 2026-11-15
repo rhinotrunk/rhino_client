@@ -11,6 +11,7 @@ export type AgentTask = {
   inputTokens: number; outputTokens: number; startedAt?: string | null; finishedAt?: string | null;
   resultPath?: string | null; workingPath?: string | null; inputPath?: string | null;
   baseCommit?: string | null; merging?: boolean; mergedBranch?: string | null; mergedAt?: string | null;
+  opening?: boolean; prBranch?: string | null; prBase?: string | null; prOpenedAt?: string | null;
 };
 export type Settings = { codexPath: string; model: string; concurrency: number };
 export type ModelingSession = {
@@ -31,7 +32,7 @@ export type PanelCommand =
   | { type: 'tasks.launch'; sessionId: string }
   | { type: 'task.add'; sessionId: string; id?: string; launch?: boolean; branchFromResult?: boolean; title: string; instructions: string; parentId?: string; scope: Scope }
   | { type: 'task.update'; id: string; title: string; instructions: string; scope: Scope }
-  | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show' | 'task.merge'; id: string }
+  | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show' | 'task.merge' | 'task.pr.open' | 'task.pr.close'; id: string }
   | { type: 'task.message'; id: string; message: string }
   | { type: 'repos'; server: string }
   | { type: 'branches'; server: string; repo: string }
@@ -46,7 +47,7 @@ export type HostEvent =
   | { type: 'session'; server: string; repo: string; branch: string }
   | { type: 'repos'; server: string; repos: string[]; message: string; error: boolean }
   | { type: 'branches'; server: string; repo: string; branches: string[]; message: string; error: boolean }
-  | { type: 'graph'; repo: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
+  | { type: 'graph'; repo: string; head?: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
   | { type: 'status'; message: string; error: boolean; busy: boolean }
   | { type: 'theme'; scheme: 'light' | 'dark' };
 

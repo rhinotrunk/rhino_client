@@ -15,7 +15,27 @@ export function previewHistory(): GraphCommit[] {
   const move = id("3");
   const box = id("4");
   const merge = id("5");
+  const facade = id("6");
+  const tip = id("7");
   return [
+    {
+      id: tip,
+      parents: [merge],
+      generation: 5,
+      timestamp: "2026-04-06T12:00:00Z",
+      message: "Tidy layers",
+      author: human,
+      refs: ["main"],
+    },
+    {
+      id: facade,
+      parents: [merge],
+      generation: 5,
+      timestamp: "2026-04-06T09:00:00Z",
+      message: "Agent task: Facade option A",
+      author: agent,
+      refs: ["agent/facade-a"],
+    },
     {
       id: merge,
       parents: [move, box],
@@ -23,7 +43,7 @@ export function previewHistory(): GraphCommit[] {
       timestamp: "2026-04-05T12:00:00Z",
       message: "Merge agent/box into main",
       author: human,
-      refs: ["main", "tag:v1"],
+      refs: ["tag:v1"],
     },
     {
       id: box,

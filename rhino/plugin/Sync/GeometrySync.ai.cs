@@ -45,6 +45,13 @@ public sealed class GeometrySync : IDisposable
         return new SyncTarget(_copy.Server, _copy.Repo, _copy.Branch);
     }
 
+    /// <summary>The commit the document was last pushed to or pulled from, or null. Call on Rhino's UI thread.</summary>
+    public string? ReadBase()
+    {
+        _copy.Read();
+        return _copy.BaseCommit;
+    }
+
     public Task<SyncResult> PushAsync(SyncTarget target, string message, CancellationToken cancellationToken = default) =>
         Run(() => PushCore(target, message, cancellationToken), cancellationToken);
 
@@ -58,6 +65,13 @@ public sealed class GeometrySync : IDisposable
     /// </summary>
     public Task<SyncResult> MergeTaskAsync(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken = default) =>
         Run(() => MergeTaskCore(target, task, cancellationToken), cancellationToken);
+
+    /// <summary>
+    /// Opens a pull request for a finished agent task: commits the result to its own agent branch, based on the
+    /// commit the task started at, and leaves it unmerged for review. The document is not changed.
+    /// </summary>
+    public Task<SyncResult> OpenPullRequestAsync(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken = default) =>
+        Run(() => OpenPullRequestCore(target, task, cancellationToken), cancellationToken);
 
     /// <summary>Pulls the branch tip. An interactive pull reviews objects whose ids already differ. A scripted pull stops instead of prompting.</summary>
     public Task<SyncResult> PullAsync(SyncTarget target, bool interactive, CancellationToken cancellationToken = default) =>
@@ -173,33 +187,15 @@ public sealed class GeometrySync : IDisposable
             $"Pushed {captured.Changes.Count} changes to {bound.Branch} ({response.Commit}).", captured.Skipped), warning));
     }
 
-    private async Task<SyncResult> MergeTaskCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
+    private sealed record PublishedBranch(SyncResult? Failure, string ChangeNote);
+
+    /// <summary>
+    /// Makes sure the task's agent branch exists and holds its result. Reuses a branch that already has the
+    /// result, so opening a pull request and then merging it commits only once.
+    /// </summary>
+    private async Task<PublishedBranch> PublishTaskBranchAsync(
+        RhinoTrunkClient client, Bound bound, TaskMergeRequest task, string branch, CancellationToken cancellationToken)
     {
-        var bound = Normalize(target);
-        if (!File.Exists(task.ResultPath))
-            return SyncResult.Fail("The task's saved result is missing, so it cannot be merged.");
-        OnUi(() =>
-        {
-            _copy.Read();
-            _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
-        });
-        if (_copy.BaseCommit is null)
-            return SyncResult.Fail($"This model is not on '{bound.Branch}' yet. Push it from the Repository tab first, then run the task so it starts from a known commit.");
-
-        var client = ClientFor(bound.Server);
-        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
-        var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false)
-            ?? throw new SyncException($"Branch '{bound.Branch}' does not exist.");
-        await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
-        if (_copy.HasUnsupported)
-            return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
-
-        // Pulling the merged result replaces model content, so never run it over unpushed edits.
-        var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
-        if (local.Changes.Count > 0)
-            return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
-
-        var branch = TaskBranch.Name(task);
         var changeNote = "";
         var existing = await client.GetBranchAsync(bound.Repo, branch, cancellationToken).ConfigureAwait(false);
         if (existing is null || existing.Commit == task.BaseCommit)
@@ -211,10 +207,10 @@ public sealed class GeometrySync : IDisposable
             var taskBase = new WorkingCopy(0);
             taskBase.Adopt(listing);
             if (taskBase.HasUnsupported)
-                return SyncResult.Fail("The task's base commit contains entities this client cannot update yet: " + taskBase.UnsupportedSummary + ".");
+                return new(SyncResult.Fail("The task's base commit contains entities this client cannot update yet: " + taskBase.UnsupportedSummary + "."), "");
             var captured = OnUi(() => CaptureResult(task.ResultPath, taskBase));
             if (captured.Changes.Count == 0)
-                return SyncResult.Success(WithSkips($"'{task.Title}' made no changes, so there is nothing to merge.", captured.Skipped));
+                return new(SyncResult.Success(WithSkips($"'{task.Title}' made no changes, so there is nothing to merge.", captured.Skipped)), "");
 
             changeNote = $" ({Describe(captured.Changes)})";
             var author = new AuthorInfo { Id = "agent-" + task.TaskId[..Math.Min(8, task.TaskId.Length)], Name = "Agent: " + task.Title, Kind = AuthorKinds.Agent };
@@ -241,6 +237,61 @@ public sealed class GeometrySync : IDisposable
                 Meta = new Dictionary<string, string> { ["task"] = task.TaskId, ["revision"] = task.Revision.ToString() },
             }, cancellationToken).ConfigureAwait(false);
         }
+
+        return new(null, changeNote);
+    }
+
+    private async Task<SyncResult> OpenPullRequestCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
+    {
+        var bound = Normalize(target);
+        if (!File.Exists(task.ResultPath))
+            return SyncResult.Fail("The task's saved result is missing, so a pull request cannot be opened.");
+        OnUi(() =>
+        {
+            _copy.Read();
+            _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
+        });
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        if (await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false) is null)
+            return SyncResult.Fail($"Branch '{bound.Branch}' does not exist.");
+
+        var branch = TaskBranch.Name(task);
+        var published = await PublishTaskBranchAsync(client, bound, task, branch, cancellationToken).ConfigureAwait(false);
+        if (published.Failure is not null) return published.Failure;
+        return SyncResult.Success($"Opened a pull request: {branch} into {bound.Branch}{published.ChangeNote}.");
+    }
+
+    private async Task<SyncResult> MergeTaskCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
+    {
+        var bound = Normalize(target);
+        if (!File.Exists(task.ResultPath))
+            return SyncResult.Fail("The task's saved result is missing, so it cannot be merged.");
+        OnUi(() =>
+        {
+            _copy.Read();
+            _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
+        });
+        if (_copy.BaseCommit is null)
+            return SyncResult.Fail($"This model is not on '{bound.Branch}' yet. Push it from the Graph tab first, then run the task so it starts from a known commit.");
+
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false)
+            ?? throw new SyncException($"Branch '{bound.Branch}' does not exist.");
+        await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        if (_copy.HasUnsupported)
+            return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
+
+        // Pulling the merged result replaces model content, so never run it over unpushed edits.
+        var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
+        if (local.Changes.Count > 0)
+            return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
+
+        var branch = TaskBranch.Name(task);
+        var published = await PublishTaskBranchAsync(client, bound, task, branch, cancellationToken).ConfigureAwait(false);
+        if (published.Failure is not null) return published.Failure;
+        var changeNote = published.ChangeNote;
 
         MergeResponse merged;
         try

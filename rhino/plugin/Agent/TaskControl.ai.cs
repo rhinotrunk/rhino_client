@@ -130,7 +130,7 @@ internal sealed class TaskControl : IDisposable
         else if (task.Merging) problem = "This task is already being merged.";
         else if (task.MergedBranch is not null) problem = $"This task was already merged via {task.MergedBranch}.";
         else if (task.Status != "ready" || task.ResultPath is null || !File.Exists(task.ResultPath)) problem = "Only a finished task with a saved result can be merged.";
-        else if (task.BaseCommit is null) problem = "This task started from a model that was not on a repository branch. Push the model from the Repository tab, then run the task again.";
+        else if (task.BaseCommit is null) problem = "This task started from a model that was not on a repository branch. Push the model from the Graph tab, then run the task again.";
         else
         {
             task.Merging = true; Publish();
@@ -140,6 +140,45 @@ internal sealed class TaskControl : IDisposable
         }
         return false;
     }
+    /// <summary>Checks a task can open a pull request and marks it as opening. Call on the UI thread.</summary>
+    public bool TryBeginPullRequest(string id, out RhinoClient.Sync.TaskMergeRequest request, out string problem)
+    {
+        request = null!;
+        var task = State.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) problem = "Task not found.";
+        else if (task.Opening || task.Merging) problem = "This task is busy.";
+        else if (task.PrBranch is not null) problem = "A pull request is already open for this task.";
+        else if (task.MergedBranch is not null) problem = $"This task was already merged via {task.MergedBranch}.";
+        else if (task.Status != "ready" || task.ResultPath is null || !File.Exists(task.ResultPath)) problem = "Only a finished task with a saved result can open a pull request.";
+        else if (task.BaseCommit is null) problem = "This task started from a model that was not on a repository branch. Push the model from the Graph tab, then run the task again.";
+        else
+        {
+            task.Opening = true; Publish();
+            request = new(task.Id, task.Title, task.Revision, task.ResultPath, task.BaseCommit);
+            problem = "";
+            return true;
+        }
+        return false;
+    }
+    /// <summary>Records the outcome of opening a pull request. Call on the UI thread.</summary>
+    public void FinishPullRequest(string id, bool ok, string message, string branch, string baseBranch)
+    {
+        var task = State.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) return;
+        task.Opening = false;
+        if (ok && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase))
+        { task.PrBranch = branch; task.PrBase = baseBranch; task.PrOpenedAt = DateTimeOffset.UtcNow; }
+        Log(task, ok ? "status" : "error", message);
+    }
+    /// <summary>Closes a task's pull request without merging. The agent branch stays in the repository.</summary>
+    public void ClosePullRequest(string id)
+    {
+        var task = Find(id);
+        if (task.PrBranch is null || task.Merging) return;
+        Log(task, "status", $"Closed the pull request for {task.PrBranch} without merging.");
+        task.PrBranch = null; task.PrBase = null; task.PrOpenedAt = null;
+        Publish();
+    }
     /// <summary>Records the outcome of a merge. Call on the UI thread.</summary>
     public void FinishMerge(string id, bool ok, string message, string branch)
     {
@@ -148,7 +187,7 @@ internal sealed class TaskControl : IDisposable
         task.Merging = false;
         if (ok && task.MergedBranch is null && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase) && _previewTaskId == id)
         { _preview.Clear(); _previewTaskId = null; }
-        if (ok && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase)) { task.MergedBranch = branch; task.MergedAt = DateTimeOffset.UtcNow; }
+        if (ok && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase)) { task.MergedBranch = branch; task.MergedAt = DateTimeOffset.UtcNow; task.PrBranch = null; task.PrBase = null; task.PrOpenedAt = null; }
         Log(task, ok ? "status" : "error", message);
     }
 
@@ -216,6 +255,7 @@ internal sealed class TaskControl : IDisposable
                     resumed.Status = "queued";
                 }
                 Publish(); Pump(); break;
+            case "task.pr.close": ClosePullRequest(id); break;
             case "task.archive":
             case "task.restore":
             case "task.remove":
@@ -456,7 +496,7 @@ internal sealed class TaskControl : IDisposable
                 File.Copy(task.WorkingPath!, result);
                 task.ResultPath = result; task.Status = "ready";
                 if (_previewTaskId == task.Id) _preview.Show(task.Document!, true, task.InputPath);
-                Log(task, "status", "Ready to merge. Use Merge to commit this result to its own branch, merge it into the model's branch, and pull it into the model.");
+                Log(task, "status", "Ready for review. Open a pull request to commit this result to its own branch, then merge it into the model's branch.");
                 return true;
             });
         }

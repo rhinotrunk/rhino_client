@@ -26,6 +26,13 @@ internal sealed class TaskEntry
     /// <summary>Commit the task's input snapshot was taken at; null when the model was not synced with a repository.</summary>
     public string? BaseCommit { get; set; }
     public bool Merging { get; set; }
+    /// <summary>True while a pull request is being opened.</summary>
+    public bool Opening { get; set; }
+    /// <summary>Agent branch of the open pull request, or null when none is open.</summary>
+    public string? PrBranch { get; set; }
+    /// <summary>Branch the pull request will merge into.</summary>
+    public string? PrBase { get; set; }
+    public DateTimeOffset? PrOpenedAt { get; set; }
     public string? MergedBranch { get; set; }
     public DateTimeOffset? MergedAt { get; set; }
     public string? SessionId { get; set; }
