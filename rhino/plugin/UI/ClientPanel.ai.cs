@@ -17,6 +17,7 @@ public sealed class ClientPanel : Panel
     private readonly uint _documentSerialNumber;
     private readonly GeometrySync _sync;
     private readonly CancellationTokenSource _unload = new();
+    private int _graphGeneration;
     private bool _busy;
     private bool _closed;
     private bool _disposed;
@@ -63,6 +64,9 @@ public sealed class ClientPanel : Panel
                 break;
             case "commits":
                 _ = SendCommits(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                break;
+            case "graph":
+                _ = SendGraph(Text(command, "server"), Text(command, "repo"));
                 break;
             case "pull":
                 _ = Pull(new SyncTarget(
@@ -143,6 +147,52 @@ public sealed class ClientPanel : Panel
         {
             if (_closed) return;
             Post(new { type = "commits", commits = Array.Empty<CommitChoice>(), error = true, message = ex.Message });
+        }
+    }
+
+    private async Task SendGraph(string server, string repo)
+    {
+        if (_closed || _busy) return;
+        var requested = repo.Trim();
+        var generation = ++_graphGeneration;
+        try
+        {
+            var graph = await _sync.LoadGraphAsync(server, requested, _unload.Token);
+            if (_closed || generation != _graphGeneration) return;
+            Post(new
+            {
+                type = "graph",
+                repo = requested,
+                truncated = graph.Truncated,
+                error = false,
+                message = "",
+                commits = graph.Commits.Select(commit => new
+                {
+                    id = commit.Id,
+                    parents = commit.Parents,
+                    generation = commit.Generation,
+                    timestamp = commit.Timestamp,
+                    message = commit.Message,
+                    author = new { id = commit.Author.Id, name = commit.Author.Name, kind = commit.Author.Kind },
+                    refs = commit.Refs,
+                }),
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
+        {
+            if (_closed || generation != _graphGeneration) return;
+            Post(new
+            {
+                type = "graph",
+                repo = requested,
+                truncated = false,
+                error = true,
+                message = ex.Message,
+                commits = Array.Empty<object>(),
+            });
         }
     }
 

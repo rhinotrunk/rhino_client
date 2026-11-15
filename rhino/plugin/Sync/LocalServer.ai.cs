@@ -4,7 +4,7 @@ using System.Text;
 
 namespace RhinoClient.Sync;
 
-/// <summary>Starts the local RhinoTrunk server when a pull or push finds it is not listening.</summary>
+/// <summary>Starts the local RhinoTrunk server when a panel request finds it is not listening.</summary>
 internal static class LocalServer
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);

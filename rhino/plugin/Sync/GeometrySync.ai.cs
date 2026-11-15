@@ -58,6 +58,10 @@ public sealed class GeometrySync : IDisposable
     public Task<IReadOnlyList<CommitChoice>> ListCommitsAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
         Task.Run(() => ListCommitsCore(target, cancellationToken), cancellationToken);
 
+    /// <summary>Commits reachable from every ref, newest first. Does not change the document.</summary>
+    public Task<GraphResponse> LoadGraphAsync(string server, string repo, CancellationToken cancellationToken = default) =>
+        Task.Run(() => LoadGraphCore(server, repo, cancellationToken), cancellationToken);
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -192,6 +196,27 @@ public sealed class GeometrySync : IDisposable
             await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
             return await FetchCommitsAsync(bound, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task<GraphResponse> LoadGraphCore(string server, string repo, CancellationToken cancellationToken)
+    {
+        var bound = NormalizeRepo(server, repo);
+        try
+        {
+            return await FetchGraphAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException) when (LocalServer.IsLoopback(bound.Server))
+        {
+            await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
+            return await FetchGraphAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<GraphResponse> FetchGraphAsync(ServerRepo bound, CancellationToken cancellationToken)
+    {
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        return await client.GraphAsync(bound.Repo, ct: cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<CommitChoice>> FetchCommitsAsync(Bound bound, CancellationToken cancellationToken)
@@ -371,16 +396,21 @@ public sealed class GeometrySync : IDisposable
         }
     }
 
+    private static ServerRepo NormalizeRepo(string server, string repo)
+    {
+        var name = repo.Trim();
+        if (!Names.IsValidRepo(name))
+            throw new SyncException("Repository name must start with a letter or digit and use only lowercase letters, digits, '.', '_' or '-'.");
+        return new ServerRepo(NormalizeServer(server), name);
+    }
+
     private static Bound Normalize(SyncTarget target)
     {
-        var server = NormalizeServer(target.Server);
-        var repo = target.Repo.Trim();
+        var repo = NormalizeRepo(target.Server, target.Repo);
         var branch = target.Branch.Trim();
-        if (!Names.IsValidRepo(repo))
-            throw new SyncException("Repository name must start with a letter or digit and use only lowercase letters, digits, '.', '_' or '-'.");
         if (!Names.IsValidRefName(branch))
             throw new SyncException($"Branch name '{branch}' is not valid.");
-        return new Bound(server, repo, branch);
+        return new Bound(repo.Server, repo.Repo, branch);
     }
 
     private static string NormalizeServer(string server)
@@ -455,5 +485,6 @@ public sealed class GeometrySync : IDisposable
         return true;
     });
 
+    private readonly record struct ServerRepo(string Server, string Repo);
     private readonly record struct Bound(string Server, string Repo, string Branch);
 }

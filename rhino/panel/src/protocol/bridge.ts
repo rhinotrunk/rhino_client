@@ -1,3 +1,4 @@
+import { previewHistory } from '../graph/fixture';
 import type { HostEvent, PanelCommand } from './events';
 
 declare const __PREVIEW__: boolean;
@@ -47,6 +48,17 @@ export function createBridge(): Bridge {
           receive({ type: 'theme', scheme });
           receive({ type: 'session', server: 'http://localhost:5280/', repo: 'demo', branch: 'main' });
           receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
+          return;
+        }
+        if (command.type === 'graph') {
+          receive({
+            type: 'graph',
+            repo: command.repo,
+            truncated: false,
+            error: false,
+            message: '',
+            commits: previewHistory(),
+          });
           return;
         }
         if (command.type === 'commits') {

@@ -1,6 +1,6 @@
 # RhinoClient
 
-A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The result of a pull or push is written to Rhino's command history and shown under the buttons.
+A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. The result of a pull or push is written to Rhino's command history and shown under the buttons.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ Output: `rhino/plugin/bin/Debug/net8.0/RhinoClient.rhp`. For a release build, ru
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates the host response so Pull and Push show a status without Rhino or the server. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
+Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates the host response: Pull and Push show a status without Rhino or the server, and the history card draws a sample graph. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
 
 ## Live reload inside Rhino
 
@@ -70,7 +70,10 @@ rhino/
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
     src/main.tsx                     React entry
-    src/panel.tsx                    pull/push form and status
+    src/panel.tsx                    pull, push, and history card
+    src/graph/story.ts               oldest-first branch walk
+    src/graph/render.ts              gitgraph drawing
+    src/graph/fixture.ts             browser preview history
     src/components/ui/               shadcn button, input, label, card, badge, scroll area
     src/protocol/events.ts           TypeScript message definitions
     src/protocol/bridge.ts           native transport and browser preview
@@ -80,7 +83,7 @@ scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends `ready`, `commits`, `pull`, and `push`. C# replies with `session`, `commits`, `status`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+TypeScript sends `ready`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `commits`, `status`, `graph`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 

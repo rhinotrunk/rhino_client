@@ -5,7 +5,7 @@
     <RootNamespace>RhinoClient</RootNamespace>
     <Version>0.1.0</Version>
     <Title>RhinoClient</Title>
-    <Description>A dockable Rhino panel with a TypeScript UI.</Description>
+    <Description>A dockable Rhino panel for pulling, pushing, and viewing model history.</Description>
     <TargetExt>.rhp</TargetExt>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -1,15 +1,26 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { renderHistory } from "./graph/render";
+import { shortHash } from "./graph/story";
 import { createBridge } from "./protocol/bridge";
-import type { CommitSummary } from "./protocol/events";
+import type { CommitSummary, GraphCommit } from "./protocol/events";
 import { cn } from "@/lib/utils";
 
 type Pin = { id: string; message: string };
+type History = {
+  repo: string;
+  commits: GraphCommit[];
+  truncated: boolean;
+  error: string;
+  loaded: boolean;
+};
+
+const emptyHistory: History = { repo: "", commits: [], truncated: false, error: "", loaded: false };
 
 export function Panel() {
   const bridge = useMemo(() => createBridge(), []);
@@ -29,6 +40,11 @@ export function Panel() {
   const [scheme, setScheme] = useState<"light" | "dark">(() =>
     window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
   );
+  const [history, setHistory] = useState<History>(emptyHistory);
+  const [requestedRepo, setRequestedRepo] = useState("");
+  const [tick, setTick] = useState(0);
+  const query = useRef({ server: "http://localhost:5280/", repo: "" });
+  const hostRef = useRef<HTMLDivElement>(null);
   const disabled = !ready || busy;
 
   useLayoutEffect(() => {
@@ -44,6 +60,8 @@ export function Panel() {
         setServer(event.server);
         setRepo(event.repo);
         setBranch(event.branch);
+        query.current = { server: event.server.trim(), repo: event.repo.trim() };
+        setTick((value) => value + 1);
       } else if (event.type === "commits") {
         if (event.error || event.commits.length === 0) {
           setCommitChoices(null);
@@ -54,6 +72,15 @@ export function Panel() {
           return;
         }
         setCommitChoices(event.commits);
+      } else if (event.type === "graph") {
+        if (event.repo !== query.current.repo) return;
+        setHistory({
+          repo: event.repo,
+          commits: event.error ? [] : event.commits,
+          truncated: event.error ? false : event.truncated,
+          error: event.error ? event.message : "",
+          loaded: true,
+        });
       } else if (event.type === "status") {
         setReady(connected);
         setBusy(event.busy);
@@ -67,6 +94,41 @@ export function Panel() {
     bridge.send({ type: "ready" });
   }, [bridge]);
 
+  useEffect(() => {
+    if (!ready || busy) return;
+    const current = query.current;
+    setRequestedRepo(current.repo);
+    if (!current.repo) {
+      setHistory({ repo: "", commits: [], truncated: false, error: "", loaded: true });
+      return;
+    }
+    setHistory((currentHistory) =>
+      currentHistory.repo === current.repo
+        ? currentHistory
+        : { repo: current.repo, commits: [], truncated: false, error: "", loaded: false },
+    );
+    bridge.send({ type: "graph", server: current.server, repo: current.repo });
+  }, [bridge, ready, busy, tick]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || history.commits.length === 0) return;
+    renderHistory(host, history.commits, scheme);
+  }, [history.commits, scheme]);
+
+  function snapshot() {
+    const next = { server: server.trim(), repo: repo.trim() };
+    query.current = next;
+    return next;
+  }
+
+  function remember() {
+    const next = { server: server.trim(), repo: repo.trim() };
+    const changed = next.server !== query.current.server || next.repo !== query.current.repo;
+    query.current = next;
+    if (changed) setTick((value) => value + 1);
+  }
+
   function chosen() {
     const text = commit.trim();
     if (pin && (text === pin.id || text === pin.message)) return pin.id;
@@ -74,32 +136,23 @@ export function Panel() {
   }
 
   function onPull() {
+    const spec = snapshot();
     setBusy(true);
     setError(false);
     setStatus("Pulling…");
     setCommitOpen(false);
-    bridge.send({
-      type: "pull",
-      server: server.trim(),
-      repo: repo.trim(),
-      branch: branch.trim(),
-      commit: chosen(),
-    });
+    bridge.send({ type: "pull", ...spec, branch: branch.trim(), commit: chosen() });
   }
 
   function onPush() {
+    const spec = snapshot();
     setBusy(true);
     setError(false);
     setStatus("Pushing…");
-    bridge.send({
-      type: "push",
-      server: server.trim(),
-      repo: repo.trim(),
-      branch: branch.trim(),
-      message: message.trim(),
-    });
+    bridge.send({ type: "push", ...spec, branch: branch.trim(), message: message.trim() });
   }
 
+  const note = historyNote(history, requestedRepo, ready);
   const showChoices = commitOpen && commitChoices !== null && commitChoices.length > 0;
 
   return (
@@ -115,8 +168,8 @@ export function Panel() {
             ) : null}
           </div>
           <div className="grid min-w-0 gap-2">
-            <Field label="Server" value={server} onChange={setServer} />
-            <Field label="Repository" value={repo} onChange={setRepo} />
+            <Field label="Server" value={server} onChange={setServer} onBlur={remember} />
+            <Field label="Repository" value={repo} onChange={setRepo} onBlur={remember} />
             <Field label="Branch" value={branch} onChange={setBranch} />
             <Field
               label="Commit"
@@ -182,15 +235,33 @@ export function Panel() {
             {status}
           </p>
         </CardHeader>
+        <CardContent className="border-t p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-medium">History</h2>
+            {history.truncated && history.loaded && history.commits.length > 0 ? (
+              <Badge variant="outline" className="font-normal">Truncated</Badge>
+            ) : null}
+          </div>
+          {note ? (
+            <p className={cn("text-sm wrap-anywhere", history.error ? "text-destructive" : "text-muted-foreground")}>{note}</p>
+          ) : (
+            <ScrollArea type="auto" className="h-72">
+              <div ref={hostRef} className="history w-max px-1 py-2" />
+            </ScrollArea>
+          )}
+        </CardContent>
       </Card>
     </div>
   );
 }
 
-function shortHash(id: string) {
-  const prefix = "sha256:";
-  const hex = id.startsWith(prefix) ? id.slice(prefix.length) : id;
-  return hex.slice(0, 8);
+function historyNote(history: History, requestedRepo: string, ready: boolean): string | null {
+  if (!ready) return null;
+  if (!requestedRepo) return "Enter a repository to see its history.";
+  if (!history.loaded || history.repo !== requestedRepo) return "Loading history…";
+  if (history.error) return history.error;
+  if (history.commits.length === 0) return "No commits yet.";
+  return null;
 }
 
 function Field({
