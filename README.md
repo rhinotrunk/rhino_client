@@ -4,7 +4,7 @@ A dockable Rhino panel with two tabs. **Repository** (first) is git-style versio
 
 ## Repository tab
 
-Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
+Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to replace the model with that commit: objects that differ are overwritten, objects the commit does not list are removed (one undo step), and no conflicts are raised. Block instances and other objects this client does not sync are kept. If the model has unpushed changes, the panel first asks whether to push them to the branch with the message above or to discard them. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
 
 ## Agents tab
 

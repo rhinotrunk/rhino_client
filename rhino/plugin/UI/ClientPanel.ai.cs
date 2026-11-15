@@ -87,7 +87,9 @@ public sealed class ClientPanel : Panel
                 case "checkout":
                     _ = Checkout(
                         new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
-                        Text(command, "commit"));
+                        Text(command, "commit"),
+                        Unpushed(Text(command, "unpushed")),
+                        Text(command, "message"));
                     break;
                 case "push":
                     _ = Push(
@@ -116,8 +118,19 @@ public sealed class ClientPanel : Panel
     internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) =>
         RunAsync("Pulling…", token => _sync.PullAsync(target, interactive, token));
 
-    internal Task<SyncResult> Checkout(SyncTarget target, string commit, bool interactive = true) =>
-        RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, interactive, token));
+    internal async Task<SyncResult> Checkout(SyncTarget target, string commit, UnpushedChoice unpushed, string message)
+    {
+        var result = await RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, unpushed, message, token));
+        if (result.Unpushed > 0) Post(new { type = "checkout.unpushed", commit, changes = result.Unpushed });
+        return result;
+    }
+
+    private static UnpushedChoice Unpushed(string value) => value switch
+    {
+        "push" => UnpushedChoice.Push,
+        "discard" => UnpushedChoice.Discard,
+        _ => UnpushedChoice.Ask,
+    };
 
     internal Task<SyncResult> Push(SyncTarget target, string message) =>
         RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
@@ -175,7 +188,7 @@ public sealed class ClientPanel : Panel
         {
             var result = await action(_unload.Token);
             _busy = false;
-            SendStatus(result.Message, !result.Ok, false);
+            SendStatus(result.Message, !result.Ok && result.Unpushed == 0, false);
             return result;
         }
         catch (OperationCanceledException)

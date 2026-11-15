@@ -13,6 +13,8 @@ export type AgentTask = {
   baseCommit?: string | null; merging?: boolean; mergedBranch?: string | null; mergedAt?: string | null;
 };
 export type Settings = { codexPath: string; model: string; concurrency: number };
+// Checkout replaces the model. 'ask' stops at unpushed changes and the host answers with 'checkout.unpushed'.
+export type UnpushedChoice = 'ask' | 'push' | 'discard';
 export type ModelingSession = {
   id: string; title: string; createdAt: string; scope: Scope; conversation: Activity[];
   archived?: boolean; isPlanning: boolean; inputTokens: number; outputTokens: number;
@@ -36,7 +38,7 @@ export type PanelCommand =
   | { type: 'repos'; server: string }
   | { type: 'branches'; server: string; repo: string }
   | { type: 'pull'; server: string; repo: string; branch: string }
-  | { type: 'checkout'; server: string; repo: string; branch: string; commit: string }
+  | { type: 'checkout'; server: string; repo: string; branch: string; commit: string; message: string; unpushed: UnpushedChoice }
   | { type: 'push'; server: string; repo: string; branch: string; message: string }
   | { type: 'graph'; server: string; repo: string };
 export type HostEvent =
@@ -48,6 +50,7 @@ export type HostEvent =
   | { type: 'branches'; server: string; repo: string; branches: string[]; message: string; error: boolean }
   | { type: 'graph'; repo: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
   | { type: 'status'; message: string; error: boolean; busy: boolean }
+  | { type: 'checkout.unpushed'; commit: string; changes: number }
   | { type: 'theme'; scheme: 'light' | 'dark' };
 
 export function newId(): string {

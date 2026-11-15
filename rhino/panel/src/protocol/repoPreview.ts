@@ -22,15 +22,23 @@ export function repoPreview(command: PanelCommand, receive: (event: HostEvent) =
     case 'graph':
       queueMicrotask(() => receive({ type: 'graph', repo: command.repo, truncated: false, error: false, message: '', commits: previewHistory() }));
       return true;
-    case 'pull':
-    case 'push':
     case 'checkout': {
-      const detail = command.type === 'checkout'
-        ? `checkout ${command.commit.replace(/^sha256:/, '').slice(0, 8)}`
-        : `${command.type} ${command.repo} ${command.branch}`;
-      queueMicrotask(() => receive({ type: 'status', message: `Preview ${detail}`, error: false, busy: false }));
+      const short = command.commit.replace(/^sha256:/, '').slice(0, 8);
+      queueMicrotask(() => {
+        if (command.unpushed === 'ask') {
+          receive({ type: 'status', message: `Preview: 2 unpushed changes. Push or discard them to check out ${short}.`, error: false, busy: false });
+          receive({ type: 'checkout.unpushed', commit: command.commit, changes: 2 });
+          return;
+        }
+        const first = command.unpushed === 'push' ? `push ${command.repo} ${command.branch}, then ` : 'discard, then ';
+        receive({ type: 'status', message: `Preview ${first}checkout ${short}`, error: false, busy: false });
+      });
       return true;
     }
+    case 'pull':
+    case 'push':
+      queueMicrotask(() => receive({ type: 'status', message: `Preview ${command.type} ${command.repo} ${command.branch}`, error: false, busy: false }));
+      return true;
     default:
       return false;
   }

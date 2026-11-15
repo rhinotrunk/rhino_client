@@ -11,8 +11,21 @@ public sealed record SyncTarget(string Server, string Repo, string Branch);
 
 public sealed record SyncResult(bool Ok, string Message)
 {
+    /// <summary>Unpushed changes that stopped a checkout before it changed anything. The caller asks whether to push or discard them.</summary>
+    public int Unpushed { get; init; }
+
     public static SyncResult Success(string message) => new(true, message);
     public static SyncResult Fail(string message) => new(false, message);
+    public static SyncResult Stopped(int unpushed, string message) => new(false, message) { Unpushed = unpushed };
+}
+
+/// <summary>What a checkout does with changes that have not been pushed. Checkout replaces the model, so they would be lost.</summary>
+public enum UnpushedChoice
+{
+    /// <summary>Stop without changing anything and report how many changes there are.</summary>
+    Ask,
+    Push,
+    Discard,
 }
 
 public sealed class SyncException : Exception
@@ -63,13 +76,13 @@ public sealed class GeometrySync : IDisposable
     public Task<SyncResult> PullAsync(SyncTarget target, bool interactive, CancellationToken cancellationToken = default) =>
         Run(() => PullCore(target, commit: null, interactive, cancellationToken), cancellationToken);
 
-    /// <summary>Checks out a commit into the document, reviewing differing objects when interactive.</summary>
-    public Task<SyncResult> CheckoutAsync(SyncTarget target, string commit, CancellationToken cancellationToken = default) =>
-        CheckoutAsync(target, commit, interactive: true, cancellationToken);
-
-    /// <summary>Checks out a commit into the document. A scripted checkout stops instead of prompting on conflicts.</summary>
-    public Task<SyncResult> CheckoutAsync(SyncTarget target, string commit, bool interactive, CancellationToken cancellationToken = default) =>
-        Run(() => PullCore(target, commit, interactive, cancellationToken), cancellationToken);
+    /// <summary>
+    /// Replaces the model with a commit, so it never raises conflicts. Unpushed changes are handled as
+    /// <paramref name="unpushed"/> says; pushing them uses <paramref name="target"/> and <paramref name="message"/>.
+    /// </summary>
+    public Task<SyncResult> CheckoutAsync(
+        SyncTarget target, string commit, UnpushedChoice unpushed, string message, CancellationToken cancellationToken = default) =>
+        Run(() => CheckoutCore(target, commit, unpushed, message, cancellationToken), cancellationToken);
 
     /// <summary>Commits reachable from every ref, newest first. Does not change the document.</summary>
     public Task<GraphResponse> LoadGraphAsync(string server, string repo, CancellationToken cancellationToken = default) =>
@@ -263,7 +276,7 @@ public sealed class GeometrySync : IDisposable
         }
 
         // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
-        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, matchCommit: true).ConfigureAwait(false);
+        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
         return pulled.Ok
             ? SyncResult.Success($"Merged '{task.Title}'{changeNote} into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
             : SyncResult.Fail($"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
@@ -284,12 +297,62 @@ public sealed class GeometrySync : IDisposable
         return DocumentMapper.Capture(doc, taskBase);
     }
 
+    private async Task<SyncResult> CheckoutCore(
+        SyncTarget target, string commit, UnpushedChoice unpushed, string message, CancellationToken cancellationToken)
+    {
+        var pushed = "";
+        if (unpushed != UnpushedChoice.Discard)
+        {
+            var changes = await CountUnpushedAsync(cancellationToken).ConfigureAwait(false);
+            if (changes > 0 && unpushed == UnpushedChoice.Ask)
+            {
+                var described = changes == 1 ? "1 unpushed change" : $"{changes} unpushed changes";
+                return SyncResult.Stopped(changes, $"This model has {described}. Push or discard them to check out {ShortCommit(commit.Trim())}.");
+            }
+
+            if (changes > 0)
+            {
+                SyncResult push;
+                try
+                {
+                    push = await PushCore(target, message, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is SyncException or RhinoTrunkApiException)
+                {
+                    push = Describe(ex);
+                }
+
+                if (!push.Ok) return SyncResult.Fail("Checkout stopped because the push failed. " + push.Message);
+                pushed = push.Message + " ";
+            }
+        }
+
+        var checkout = await PullCommitAsync(target, commit, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
+        return pushed.Length == 0 ? checkout : checkout with { Message = pushed + checkout.Message };
+    }
+
+    /// <summary>
+    /// Changes since the document's base commit, in the repository the document is stored against. A document
+    /// that was never pushed or pulled counts its model objects, so an empty new document has nothing to lose.
+    /// </summary>
+    private async Task<int> CountUnpushedAsync(CancellationToken cancellationToken)
+    {
+        OnUi(() => _copy.Read());
+        if (_copy.BaseCommit is null)
+            return OnUi(() => DocumentMapper.ModelObjectCount(_copy.Require()));
+        await EnsureBaseMapAsync(ClientFor(NormalizeServer(_copy.Server)), _copy.Repo, cancellationToken).ConfigureAwait(false);
+        if (_copy.HasUnsupported)
+            throw new SyncException("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
+        if (!_copy.HasEntries) throw new SyncException("The base commit could not be loaded.");
+        return OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy).Changes.Count);
+    }
+
     private async Task<SyncResult> PullCore(
-        SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool matchCommit = false)
+        SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool replace = false)
     {
         try
         {
-            return await PullCommitAsync(target, commit, interactive, cancellationToken, matchCommit).ConfigureAwait(false);
+            return await PullCommitAsync(target, commit, interactive, cancellationToken, replace).ConfigureAwait(false);
         }
         catch (PullReviewCancelledException)
         {
@@ -297,7 +360,8 @@ public sealed class GeometrySync : IDisposable
         }
     }
 
-    private async Task<SyncResult> PullCommitAsync(SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool matchCommit = false)
+    /// <param name="replace">Make the model match the commit without reviewing objects that differ. See <see cref="DocumentMapper.Apply"/>.</param>
+    private async Task<SyncResult> PullCommitAsync(SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool replace = false)
     {
         var checkout = commit is not null;
         string revision;
@@ -353,20 +417,17 @@ public sealed class GeometrySync : IDisposable
             List<ObjectConflict>? conflicts = null;
             try
             {
-                conflicts = PullConflicts.Find(doc, decoded);
-                IReadOnlyDictionary<string, ConflictChoice> choices;
-                if (conflicts.Count == 0)
-                    choices = new Dictionary<string, ConflictChoice>();
-                else if (matchCommit)
-                    // A merged agent task: the model has no unpushed edits, so objects that differ are exactly
-                    // what the merge changed. Take the incoming version without a review prompt.
-                    choices = conflicts.ToDictionary(conflict => conflict.EntityId, _ => ConflictChoice.KeepIncoming, StringComparer.Ordinal);
-                else if (!interactive)
-                    throw new SyncException(PullConflicts.ScriptedMessage(conflicts));
-                else
-                    choices = PullConflicts.Review(doc, conflicts);
+                IReadOnlyDictionary<string, ConflictChoice> choices = new Dictionary<string, ConflictChoice>();
+                if (!replace)
+                {
+                    conflicts = PullConflicts.Find(doc, decoded);
+                    if (conflicts.Count > 0 && !interactive)
+                        throw new SyncException(PullConflicts.ScriptedMessage(conflicts));
+                    if (conflicts.Count > 0)
+                        choices = PullConflicts.Review(doc, conflicts);
+                }
 
-                var serials = DocumentMapper.Apply(doc, entities, blobs, decoded, choices, removeUnlisted: matchCommit);
+                var serials = DocumentMapper.Apply(doc, entities, blobs, decoded, choices, replace);
                 var entries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
                 foreach (var entity in entities)
                     entries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);

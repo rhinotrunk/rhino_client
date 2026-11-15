@@ -7,8 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { renderHistory } from "./graph/render";
+import { shortHash } from "./graph/story";
 import type { Bridge } from "./protocol/bridge";
-import type { GraphCommit } from "./protocol/events";
+import type { GraphCommit, UnpushedChoice } from "./protocol/events";
 import { cn } from "@/lib/utils";
 
 type History = {
@@ -46,11 +47,13 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [listedBranchServer, setListedBranchServer] = useState("");
   const [listedBranchRepo, setListedBranchRepo] = useState("");
+  const [unpushed, setUnpushed] = useState<{ commit: string; changes: number } | null>(null);
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
   const repoRequest = useRef("");
   const branchRequest = useRef({ server: "", repo: "" });
   const hostRef = useRef<HTMLDivElement>(null);
   const checkoutRef = useRef<(id: string) => void>(() => {});
+  const unpushedId = useId();
   const disabled = !ready || busy;
 
   useLayoutEffect(() => {
@@ -95,6 +98,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
         setBusy(event.busy);
         setError(event.error);
         setStatus(event.message);
+      } else if (event.type === "checkout.unpushed") {
+        setUnpushed({ commit: event.commit, changes: event.changes });
       }
     });
   }, [bridge, connected]);
@@ -188,23 +193,34 @@ export function Panel({ bridge }: { bridge: Bridge }) {
 
   function onPull() {
     const spec = snapshot();
+    setUnpushed(null);
     setBusy(true);
     setError(false);
     setStatus("Pulling…");
     bridge.send({ type: "pull", ...spec, branch: branch.trim() });
   }
 
-  checkoutRef.current = (id: string) => {
+  function checkout(id: string, choice: UnpushedChoice) {
     if (!ready || busy) return;
     const spec = snapshot();
+    setUnpushed(null);
     setBusy(true);
     setError(false);
     setStatus("Checking out…");
-    bridge.send({ type: "checkout", ...spec, branch: branch.trim(), commit: id });
-  };
+    bridge.send({ type: "checkout", ...spec, branch: branch.trim(), commit: id, message: message.trim(), unpushed: choice });
+  }
+
+  checkoutRef.current = (id: string) => checkout(id, "ask");
+
+  function cancelCheckout() {
+    setUnpushed(null);
+    setError(false);
+    setStatus("Checkout cancelled. The model was not changed.");
+  }
 
   function onPush() {
     const spec = snapshot();
+    setUnpushed(null);
     setBusy(true);
     setError(false);
     setStatus("Pushing…");
@@ -258,9 +274,30 @@ export function Panel({ bridge }: { bridge: Bridge }) {
               Push
             </Button>
           </div>
-          <p role="status" className={cn("text-sm wrap-anywhere", error ? "text-destructive" : "text-muted-foreground")}>
-            {status}
-          </p>
+          {unpushed ? (
+            <div role="alertdialog" aria-labelledby={unpushedId} className="grid gap-2 rounded-md border p-2">
+              <p id={unpushedId} className="text-sm wrap-anywhere">
+                Checking out {shortHash(unpushed.commit)} replaces the model. It has{" "}
+                {unpushed.changes === 1 ? "1 unpushed change" : `${unpushed.changes} unpushed changes`}. Push them to{" "}
+                {branch.trim() || "the branch"} first, or discard them?
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" className="flex-1" disabled={disabled} onClick={() => checkout(unpushed.commit, "push")}>
+                  Push and check out
+                </Button>
+                <Button type="button" size="sm" variant="destructive" className="flex-1" disabled={disabled} onClick={() => checkout(unpushed.commit, "discard")}>
+                  Discard and check out
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={cancelCheckout}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p role="status" className={cn("text-sm wrap-anywhere", error ? "text-destructive" : "text-muted-foreground")}>
+              {status}
+            </p>
+          )}
         </CardHeader>
         <CardContent className="border-t p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
