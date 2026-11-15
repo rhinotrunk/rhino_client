@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using RhinoClient.Agent;
 using Eto.Forms;
 using Rhino;
 using Rhino.Runtime;
@@ -12,12 +14,15 @@ public sealed class ClientPanel : Panel
     public static Guid PanelId => typeof(ClientPanel).GUID;
 
     private readonly PanelBridge _bridge;
-    private int _clicks;
+    private readonly TaskControl _control;
 
     public ClientPanel() : this(0) { }
 
     public ClientPanel(uint documentSerialNumber)
     {
+        _control = TaskControl.For(documentSerialNumber);
+        _control.Changed += SendState;
+        _control.SelectionCaptured += SendSelection;
         var view = new WebView();
         _bridge = new PanelBridge(view, OnCommand);
         Content = view;
@@ -37,28 +42,21 @@ public sealed class ClientPanel : Panel
         view.LoadHtml(reader.ReadToEnd());
     }
 
-    private void OnCommand(string type)
+    private async void OnCommand(JsonElement command)
     {
-        switch (type)
+        try
         {
-            case "ready":
-                SendTheme();
-                SendState();
-                break;
-            case "button.click":
-                _clicks++;
-                RhinoApp.WriteLine($"RhinoClient: button clicked ({_clicks}).");
-                SendState();
-                break;
+            if (AgentJson.Text(command, "type") == "ready") SendTheme();
+            await _control.Command(command);
+        }
+        catch (Exception ex)
+        {
+            _bridge.Post(new { type = "control.error", message = ex.Message });
         }
     }
 
-    private void SendState() => _bridge.Post(new
-    {
-        type = "state",
-        clicks = _clicks,
-        message = _clicks == 0 ? "Connected to Rhino" : $"Rhino received click {_clicks}",
-    });
+    private void SendState() => _bridge.Post(_control.Snapshot());
+    private void SendSelection(List<Guid> ids) => _bridge.Post(new { type = "scope.selection", objectIds = ids });
 
     private void SendTheme() => _bridge.Post(new
     {
@@ -85,6 +83,8 @@ public sealed class ClientPanel : Panel
         if (disposing)
         {
             ThemeSettings.ThemeChanged -= OnThemeChanged;
+            _control.Changed -= SendState;
+            _control.SelectionCaptured -= SendSelection;
             _bridge.Dispose();
         }
         base.Dispose(disposing);

@@ -1,5 +1,7 @@
 import './styles/panel.css';
 import { createRoot } from 'react-dom/client';
+import { Component } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { App } from './app';
 import { createBridge } from './protocol/bridge';
 
@@ -15,4 +17,23 @@ const syncTheme = () => {
 syncTheme();
 preferredTheme.addEventListener('change', syncTheme);
 
-createRoot(root).render(<App bridge={createBridge()} />);
+const bridge = createBridge();
+function report(message: string) {
+  bridge.send({ type: 'panel.error', message: message.slice(0, 4000) });
+}
+window.addEventListener('error', event => report(event.message));
+window.addEventListener('unhandledrejection', event => report(String(event.reason)));
+class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state: { error: string | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error: error.message }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { report(`${error.message}\n${info.componentStack}`); }
+  render() {
+    if (this.state.error) return <div className="connection-screen" role="alert">
+      <h1>The panel could not display this session</h1><p>{this.state.error}</p>
+      <p>Your tasks and model copies are retained by Rhino.</p>
+      <button className="primary" onClick={() => this.setState({ error: null })}>Reconnect panel</button>
+    </div>;
+    return this.props.children;
+  }
+}
+createRoot(root).render(<PanelErrorBoundary><App bridge={bridge} /></PanelErrorBoundary>);

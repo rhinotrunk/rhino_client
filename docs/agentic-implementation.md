@@ -14,13 +14,13 @@ The engine's existing README describes entity history, commits, branches, valida
 
 ## Current scope
 
-Discuss and plan the chat interface, task management, and agent access to Rhino geometry tools. Use `RhinoAI-rhino8-intel` as an implementation reference. No application code or Git engine integration is being written during this discussion.
+Implement the task control plane and external Codex CLI workers, using `RhinoAI-rhino8-intel` as an architectural reference. Real geometry work targets isolated headless document copies. Git history and PR acceptance remain deferred; browser preview explicitly simulates execution.
 
 ## Agreed initial execution model
 
 Each task works in a separate document copy. Its edits remain separate from the shared model. A completed task can raise a proposal (called a "PR" in the intended UI); acceptance and applying the changes to the shared model are deferred for the initial version.
 
-Separate copies do not yet prescribe separate Rhino processes or headless documents; the execution mechanism remains to be decided.
+The initial implementation uses headless document copies within the Rhino process. Document tools execute on the UI thread; external agent reasoning can run concurrently.
 
 ## Task planning and launch
 
@@ -57,11 +57,11 @@ Task dependency, alternative choice, and version ancestry are related but distin
 
 Recommended initial boundary: one upstream result per task, supporting trees without multi-parent reconciliation. A future task consuming multiple upstream results requires an explicit reconciliation step and a graph view or cross-links. No circular dependencies. Parent revisions must not silently update already-started children.
 
-Open launch-policy decision: a reviewed plan may authorize children to start automatically when their parent produces a result, or require approval of that result as an input first. Both are distinct from accepting the proposal into main. Until resolved, do not assume automatic downstream launch.
+Launching reviewed tasks authorizes queued children to start automatically when their pinned upstream results are ready. Individual tasks can be launched separately. This authorizes use of upstream results as inputs; it does not accept any proposal into main.
 
 ## Task geometry scope
 
-Each task has an editable scope consisting of selected objects or layers. The rest of its document copy provides read-only context. Scope is an enforced boundary, not merely an instruction to the agent. Expanding it requires human approval before edits outside the existing scope occur.
+For the initial workflow trial, scope selection is optional: an empty selection authorizes edits throughout the isolated task copy. Users may restrict a task to selected objects or layers under optional context settings; in that case, the rest of the copy provides read-only context. Scope is an enforced boundary, not merely an instruction to the agent. Expanding it requires human approval before edits outside the existing scope occur.
 
 For example, a facade task may inspect the structural grid but cannot modify it unless its editable scope is explicitly expanded. The enforcement mechanism and how layer membership changes affect scope remain implementation questions.
 
@@ -98,12 +98,12 @@ References: `../git_engine/docs/API.md`, `../git_engine/docs/OPEN_QUESTIONS.md`,
 
 ## Unresolved
 
-- How separate document copies are hosted and inspected before Git engine integration.
-- How tasks are created, scoped, monitored, interrupted, and reviewed.
+- Full native geometry execution and preview verification inside Rhino.
+- Future branch/commit integration and human PR acceptance.
 
 ## Control-plane functionality and dependencies
 
-The supplied session-dashboard screenshots are a functional reference, not a visual design to copy. RhinoAI's UI is also a reference rather than the chosen interface.
+The supplied Ellipsis screenshots are now both a functional and visual reference, following the later UI direction. RhinoAI's UI is also a reference rather than the chosen interface.
 
 Required direction: users can add tasks, inspect each task's conversation and activity, and stop tasks independently. Task details should expose scope, document copy, runtime/model, lifecycle events, tool calls and results, and the resulting PR. Show usage and cost when the selected runtime provides them; unavailable metrics must remain explicitly unavailable.
 
@@ -114,3 +114,45 @@ Recommendation, not yet a confirmed implementation choice: begin with a local ta
 Stopping a task should prevent further tool dispatch, request worker cancellation, and report when it actually stops. An in-flight Rhino operation may need to finish; stop is not an automatic rollback. Retain the document copy and activity history for inspection. After a crash, mark uncertain runs interrupted and reconcile the worker/document state before offering continuation; do not blindly replay geometry mutations.
 
 Consider Inngest or another durable orchestration service later if requirements include distributed execution, durable waits, scheduling, or automatic recovery across service restarts. Such a service cannot itself restore a Rhino document or guarantee that a timed-out geometry mutation did not execute. Relevant official references: https://www.inngest.com/docs/durable-execution and https://www.inngest.com/docs/durable-execution/guides-and-advanced/error-handling.
+
+## Initial working interface
+
+Use the Ellipsis screenshots as the visual reference: session navigation and listing, session chat and records, nested task trees, and an overview rail when space permits.
+
+New session opens an in-panel page asking for a description. Starting the session launches its orchestrator, which inspects context and proposes manageable tasks with dependencies. Planning is the beginning of the session; there is no separate planning feature or orchestrator navigation entry. A simple request may produce a single task. Workers start only when the user runs reviewed tasks, individually or for that session. Follow-up conversation can refine or extend the session. Tasks retain separate conversations, scopes, workers, document copies, and proposals.
+
+Session membership, task dependency, and commit ancestry are different relationships. A session can contain several independent roots and alternative branches. Launching one session's plan must not launch drafts in another session. Dependencies are currently restricted to tasks in the same session.
+
+Scope selection remains optional for this trial: an empty scope permits the whole isolated task copy, while explicit object/layer selections restrict edits. Git history and PR acceptance remain mocked/deferred.
+
+## Budget runtime defaults
+
+Planning and task workers default to `gpt-6-luna` with low reasoning effort. The settings also offer `gpt-6.1-terra`, the lower-cost GPT-6.1 option. Both are in the installed CLI catalog. An empty or older expensive model selection is normalized to Luna. The runner always passes an explicit model and low reasoning; it does not silently fall back to a more expensive model.
+
+Pricing was checked against the official Codex/Work credit rate card: https://learn.chatgpt.com/docs/pricing. Luna is cheaper than Terra and Sol; subscription usage and API pricing are distinct.
+
+Existing pre-session history is migrated into a previous modeling session. Prior CLI thread IDs are preserved separately as worker thread IDs. Saved document history persists locally; interrupted execution is not automatically replayed.
+
+Verification: the actual Codex runner completed initial and resumed live turns using the budget model and MCP test endpoint. Browser execution is simulated and labeled. Full native geometry execution still needs verification inside Rhino.
+
+## Task alternatives and viewport inspection
+
+Every requested design alternative should be a separate sibling task. A shared grid plus three facade options has four task nodes; do not bundle three alternatives into one worker's task. Existing completed combined studies are retained rather than rewritten.
+
+Selecting a task previews its isolated copy in the source Rhino viewport through a transient display conduit. The preview includes upstream geometry and refreshes after edits when that task is selected. Return to main model removes the preview without changing source objects. Preview display currently covers curves, Breps, meshes and points; unsupported geometry is represented by bounds. Branch-from-result actions are available on each left-tree task row once a saved result exists.
+
+Native logs confirmed real creation: the inspected grid result had nine geometry creation calls and the combined facade study had 123, with a saved 3dm result of about 1.28 MB. The earlier empty viewport reflected hidden headless copies rather than absent worker geometry.
+
+## Adding work at any depth
+
+Each task row exposes Add task, available before or after execution, and Branch out, available once the task has a completed result. Add task creates a dependent child that waits for its parent result when launched. Branch out pins the already-produced result immediately as a new exploration's input. Both can be repeated at arbitrary depth and remain within the same session.
+
+The UI distinguishes Not launched, Queued for worker, Waiting for a named parent to launch or finish, and Blocked by a failed/stopped/interrupted parent. A queued dependency is not represented as if it were actively computing.
+
+## Reviewing and retaining work
+
+Task lists expose Run and a compact action menu. Pause excludes draft/queued tasks from bulk launch; pausing a running worker cancels it at the tool boundary and retains its checkpoint. Resume continues after inspection of saved geometry rather than repeating completed operations. Pause is not process suspension or geometry rollback.
+
+Archive sessions or task subtrees to hide them while retaining conversations, files and results. Show archived provides restore actions. Archive stops affected queued/running workers; restore does not automatically restart them. Remove excludes a task and its dependent subtree from the plan and future execution; underlying records and model copies are retained on disk. Bulk run excludes paused, archived and removed tasks.
+
+The original session conversation remains the coordination thread. Task views link back to Session chat, and the orchestrator receives current task summaries on follow-up turns. Tree rows and plan-list controls use compact spacing.

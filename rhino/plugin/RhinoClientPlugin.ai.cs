@@ -19,4 +19,5 @@ public sealed class RhinoClientPlugin : PlugIn
             typeof(RhinoClientPlugin).Assembly, "RhinoClient.panel.svg", PanelType.PerDoc);
         return LoadReturnCode.Success;
     }
+    protected override void OnShutdown() => RhinoClient.Agent.TaskControl.Shutdown();
 }

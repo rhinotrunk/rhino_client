@@ -1,6 +1,22 @@
 # RhinoClient
 
-A minimal dockable Rhino panel. Run **RhinoClient** in Rhino's command line to open it. The panel has one **Say hello** button. Clicking it sends a JSON message to C#, writes to Rhino's command history, and shows the C# reply below the button.
+A dockable Rhino agent control plane. Run **RhinoClient** in Rhino's command line to open it. Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
+
+Git history and PR acceptance are deferred. “PR ready” currently means a saved local task result, available through **Inspect document copy**. The source model is not changed by task workers.
+
+## Try a session
+
+1. Ensure the Codex CLI is installed and signed in (`codex login status`). Set `RHINOCLIENT_CODEX` or the panel's executable setting if Rhino cannot find it.
+2. Build and launch using the commands below, then run `RhinoClient` in Rhino.
+3. Choose **New session**, describe the modeling work, and click **Start session**. For example: “Create one box from [0,0,0] to [10,10,10].”
+4. The session begins with orchestration. Review its proposed tasks and click **Run task** or **Run reviewed tasks**.
+5. Inspect each task's **Chat**, **Records**, and **Details**. Stop tasks independently or stop the session. Inspect the saved copy when the task finishes.
+
+Both orchestration and workers default to **GPT-6 Luna, low reasoning effort**. **GPT-6.1 Terra** is the other budget option in settings. There is no automatic expensive fallback. The plugin uses the existing Codex CLI login; no API key is entered in the panel.
+
+Current geometry tools cover context/object inspection, polyline/box/sphere creation, move/rotate/scale/copy, and deletion. Object/layer scope is optional; an empty scope allows edits throughout the isolated copy. Arbitrary scripts and commands are not exposed.
+
+Browser preview simulates agents and geometry and labels itself accordingly. The actual CLI/MCP transport has been tested with the budget model, including conversation continuation; full native geometry execution still needs verification inside Rhino.
 
 ## Requirements
 
@@ -34,7 +50,7 @@ Output: `rhino/plugin/bin/Debug/net8.0/RhinoClient.rhp`. For a release build, ru
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates the host response so the button works without Rhino. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
+Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates session planning and task execution without Rhino or model requests. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
 
 ## Live reload inside Rhino
 
@@ -44,7 +60,7 @@ Build the Debug plugin once with `npm run build`. Start `npm run dev` in one ter
 npm run start:dev
 ```
 
-Run `RhinoClient` in the new Rhino instance. This Debug-only mode loads <http://127.0.0.1:5173/panel.host.html> with the real Rhino bridge. Saving TypeScript or CSS automatically rebuilds and reloads the panel without restarting Rhino. Reloads reset JavaScript state; the C# click count is sent back when the page reconnects. C# changes still require a rebuild and Rhino restart.
+Run `RhinoClient` in the new Rhino instance. This Debug-only mode loads <http://127.0.0.1:5173/panel.host.html> with the real Rhino bridge. Saving TypeScript or CSS automatically rebuilds and reloads the panel without restarting Rhino. Reloads reset view state; sessions and tasks are owned by C# and sent back when the page reconnects. C# changes still require a rebuild and Rhino restart.
 
 Keep the dev server running while using this mode. Regular `npm start` uses the embedded UI, and Release builds always use the embedded UI.
 
@@ -61,11 +77,12 @@ rhino/
   plugin/
     RhinoClientPlugin.ai.cs           plugin entry point and panel registration
     Commands/RhinoClientCommand.ai.cs command that opens the panel
-    UI/ClientPanel.ai.cs              Eto WebView host and button behavior
+    UI/ClientPanel.ai.cs              Eto WebView host and control-plane adapter
+    Agent/                           sessions, task supervisor, Codex runner, scoped MCP tools
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
     src/main.tsx                     React entry point
-    src/app.tsx                      panel layout and host state
+    src/app.tsx                      session list, chat, task tree and execution controls
     src/components/ui/               local shadcn/ui components
     src/protocol/events.ts           TypeScript message definitions
     src/protocol/bridge.ts           native transport and browser preview
@@ -75,7 +92,7 @@ scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends `ready` and `button.click`. C# replies with `state` and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+TypeScript sends session, task, settings and scope commands. C# replies with `control.state`, `control.error`, selection results and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 
