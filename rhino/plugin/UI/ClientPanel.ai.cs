@@ -18,6 +18,8 @@ public sealed class ClientPanel : Panel
     private readonly GeometrySync _sync;
     private readonly CancellationTokenSource _unload = new();
     private int _graphGeneration;
+    private int _reposGeneration;
+    private int _branchesGeneration;
     private bool _busy;
     private bool _closed;
     private bool _disposed;
@@ -61,6 +63,12 @@ public sealed class ClientPanel : Panel
                 SendTheme();
                 SendSession();
                 SendStatus(_busy ? _busyMessage : "Connected to Rhino", false, _busy);
+                break;
+            case "repos":
+                _ = SendRepos(Text(command, "server"));
+                break;
+            case "branches":
+                _ = SendBranches(Text(command, "server"), Text(command, "repo"));
                 break;
             case "commits":
                 _ = SendCommits(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
@@ -122,6 +130,57 @@ public sealed class ClientPanel : Panel
             _busy = false;
             SendStatus(ex.Message, true, false);
             return SyncResult.Fail(ex.Message);
+        }
+    }
+
+    private async Task SendRepos(string server)
+    {
+        if (_closed) return;
+        var requested = server.Trim();
+        var generation = ++_reposGeneration;
+        try
+        {
+            var repos = await _sync.ListReposAsync(requested, _unload.Token);
+            if (_closed || generation != _reposGeneration) return;
+            Post(new { type = "repos", server = requested, repos, error = false, message = "" });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
+        {
+            if (_closed || generation != _reposGeneration) return;
+            Post(new { type = "repos", server = requested, repos = Array.Empty<string>(), error = true, message = ex.Message });
+        }
+    }
+
+    private async Task SendBranches(string server, string repo)
+    {
+        if (_closed) return;
+        var requestedServer = server.Trim();
+        var requestedRepo = repo.Trim();
+        var generation = ++_branchesGeneration;
+        try
+        {
+            var branches = await _sync.ListBranchesAsync(requestedServer, requestedRepo, _unload.Token);
+            if (_closed || generation != _branchesGeneration) return;
+            Post(new { type = "branches", server = requestedServer, repo = requestedRepo, branches, error = false, message = "" });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
+        {
+            if (_closed || generation != _branchesGeneration) return;
+            Post(new
+            {
+                type = "branches",
+                server = requestedServer,
+                repo = requestedRepo,
+                branches = Array.Empty<string>(),
+                error = true,
+                message = ex.Message,
+            });
         }
     }
 

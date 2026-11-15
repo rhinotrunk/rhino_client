@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +44,17 @@ export function Panel() {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [requestedRepo, setRequestedRepo] = useState("");
   const [tick, setTick] = useState(0);
+  const [repos, setRepos] = useState<string[]>([]);
+  const [repoNote, setRepoNote] = useState("");
+  const [reposLoading, setReposLoading] = useState(false);
+  const [listedRepoServer, setListedRepoServer] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchNote, setBranchNote] = useState("");
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [listedBranchRepo, setListedBranchRepo] = useState("");
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
+  const repoRequest = useRef("");
+  const branchRequest = useRef({ server: "", repo: "" });
   const hostRef = useRef<HTMLDivElement>(null);
   const disabled = !ready || busy;
 
@@ -62,6 +73,18 @@ export function Panel() {
         setBranch(event.branch);
         query.current = { server: event.server.trim(), repo: event.repo.trim() };
         setTick((value) => value + 1);
+      } else if (event.type === "repos") {
+        if (event.server !== repoRequest.current) return;
+        setReposLoading(false);
+        setRepos(event.error ? [] : event.repos);
+        setRepoNote(event.error ? event.message : "");
+        setListedRepoServer(event.server);
+      } else if (event.type === "branches") {
+        if (event.server !== branchRequest.current.server || event.repo !== branchRequest.current.repo) return;
+        setBranchesLoading(false);
+        setBranches(event.error ? [] : event.branches);
+        setBranchNote(event.error ? event.message : "");
+        setListedBranchRepo(event.repo);
       } else if (event.type === "commits") {
         if (event.error || event.commits.length === 0) {
           setCommitChoices(null);
@@ -122,11 +145,53 @@ export function Panel() {
     return next;
   }
 
-  function remember() {
-    const next = { server: server.trim(), repo: repo.trim() };
+  function remember(nextServer = server, nextRepo = repo) {
+    const next = { server: nextServer.trim(), repo: nextRepo.trim() };
     const changed = next.server !== query.current.server || next.repo !== query.current.repo;
     query.current = next;
     if (changed) setTick((value) => value + 1);
+  }
+
+  function requestRepos(serverValue = server) {
+    if (bridge.kind === "unavailable") return;
+    const next = serverValue.trim();
+    repoRequest.current = next;
+    if (!next) {
+      setRepos([]);
+      setRepoNote("");
+      setReposLoading(false);
+      return;
+    }
+    setReposLoading(true);
+    setRepoNote("");
+    bridge.send({ type: "repos", server: next });
+  }
+
+  function requestBranches(serverValue = server, repoValue = repo) {
+    if (bridge.kind === "unavailable") return;
+    const nextServer = serverValue.trim();
+    const nextRepo = repoValue.trim();
+    branchRequest.current = { server: nextServer, repo: nextRepo };
+    if (!nextServer || !nextRepo) {
+      setBranches([]);
+      setBranchNote(nextServer && !nextRepo ? "Enter a repository first." : "");
+      setBranchesLoading(false);
+      setListedBranchRepo(nextRepo);
+      return;
+    }
+    setBranchesLoading(true);
+    setBranchNote("");
+    bridge.send({ type: "branches", server: nextServer, repo: nextRepo });
+  }
+
+  function chooseRepo(value: string) {
+    setRepo(value);
+    if (value.trim() !== listedBranchRepo) {
+      setBranches([]);
+      setBranchNote("");
+      setListedBranchRepo("");
+    }
+    remember(server, value);
   }
 
   function chosen() {
@@ -168,9 +233,28 @@ export function Panel() {
             ) : null}
           </div>
           <div className="grid min-w-0 gap-2">
-            <Field label="Server" value={server} onChange={setServer} onBlur={remember} />
-            <Field label="Repository" value={repo} onChange={setRepo} onBlur={remember} />
-            <Field label="Branch" value={branch} onChange={setBranch} />
+            <Field label="Server" value={server} onChange={setServer} onBlur={() => remember()} />
+            <SuggestField
+              label="Repository"
+              value={repo}
+              onChange={setRepo}
+              onCommit={chooseRepo}
+              options={listedRepoServer === server.trim() ? repos : []}
+              note={listedRepoServer === server.trim() ? repoNote : ""}
+              loading={reposLoading}
+              empty="No repositories yet."
+              onOpen={() => requestRepos()}
+            />
+            <SuggestField
+              label="Branch"
+              value={branch}
+              onChange={setBranch}
+              options={listedBranchRepo === repo.trim() ? branches : []}
+              note={listedBranchRepo === repo.trim() ? branchNote : ""}
+              loading={branchesLoading}
+              empty="No branches yet."
+              onOpen={() => requestBranches()}
+            />
             <Field
               label="Commit"
               value={commit}
@@ -262,6 +346,225 @@ function historyNote(history: History, requestedRepo: string, ready: boolean): s
   if (history.error) return history.error;
   if (history.commits.length === 0) return "No commits yet.";
   return null;
+}
+
+function SuggestField({
+  label,
+  value,
+  onChange,
+  onCommit,
+  options,
+  note,
+  loading,
+  empty,
+  onOpen,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onCommit?: (value: string) => void;
+  options: readonly string[];
+  note: string;
+  loading: boolean;
+  empty: string;
+  onOpen: () => void;
+}) {
+  const id = useId();
+  const listId = useId();
+  const [open, setOpen] = useState(false);
+  const [filtering, setFiltering] = useState(false);
+  const [active, setActive] = useState(0);
+  const [place, setPlace] = useState({ top: 0, left: 0, width: 0, maxHeight: 160 });
+  const openRef = useRef(false);
+  const moved = useRef(false);
+  const choosing = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
+
+  const shown = useMemo(() => {
+    if (!filtering) return options;
+    const query = value.trim().toLowerCase();
+    if (!query) return options;
+    return options.filter((name) => name.toLowerCase().includes(query));
+  }, [filtering, options, value]);
+  const shownKey = shown.join("\n");
+
+  useEffect(() => {
+    if (!open) return;
+    if (moved.current) {
+      setActive((index) => (shown.length === 0 ? 0 : Math.min(index, shown.length - 1)));
+      return;
+    }
+    const match = shown.findIndex((name) => name === value.trim());
+    setActive(match >= 0 ? match : 0);
+  }, [open, shown, shownKey, value]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function placeMenu() {
+      const box = inputRef.current?.getBoundingClientRect();
+      if (!box) return;
+      const margin = 4;
+      const below = window.innerHeight - box.bottom - margin;
+      const above = box.top - margin;
+      const openUp = below < 120 && above > below;
+      const maxHeight = Math.max(80, Math.min(160, openUp ? above : below));
+      const top = openUp ? Math.max(margin, box.top - margin - maxHeight) : box.bottom + margin;
+      setPlace((current) =>
+        current.top === top && current.left === box.left && current.width === box.width && current.maxHeight === maxHeight
+          ? current
+          : { top, left: box.left, width: box.width, maxHeight },
+      );
+    }
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    window.addEventListener("scroll", placeMenu, true);
+    return () => {
+      window.removeEventListener("resize", placeMenu);
+      window.removeEventListener("scroll", placeMenu, true);
+    };
+  }, [open, shownKey]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    const item = activeRef.current;
+    if (!list || !item) return;
+    const top = item.offsetTop;
+    const bottom = top + item.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+  }, [active, open, shownKey]);
+
+  function setMenu(next: boolean) {
+    openRef.current = next;
+    setOpen(next);
+  }
+
+  function openMenu() {
+    const already = openRef.current;
+    moved.current = false;
+    setFiltering(false);
+    setMenu(true);
+    if (!already) onOpen();
+  }
+
+  function closeMenu() {
+    setMenu(false);
+  }
+
+  function choose(name: string) {
+    onChange(name);
+    onCommit?.(name);
+    closeMenu();
+  }
+
+  function move(delta: number) {
+    if (shown.length === 0) return;
+    moved.current = true;
+    setActive((index) => (index + delta + shown.length) % shown.length);
+  }
+
+  const showChoices = shown.length > 0;
+  const showStatus = !filtering && !showChoices && (loading || note !== "" || options.length === 0);
+  const menu = open && (showChoices || showStatus);
+
+  return (
+    <div className="relative grid gap-1">
+      <Label htmlFor={id} className="text-muted-foreground">{label}</Label>
+      <Input
+        id={id}
+        ref={inputRef}
+        className="h-8"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listId}
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        value={value}
+        onChange={(event) => {
+          moved.current = false;
+          setFiltering(true);
+          const already = openRef.current;
+          setMenu(true);
+          onChange(event.target.value);
+          if (!already) onOpen();
+        }}
+        onFocus={openMenu}
+        onClick={openMenu}
+        onBlur={() => {
+          closeMenu();
+          if (choosing.current) {
+            choosing.current = false;
+            return;
+          }
+          onCommit?.(value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            if (!openRef.current) openMenu();
+            else move(1);
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            if (openRef.current) move(-1);
+          } else if (event.key === "Enter" && openRef.current && shown[active]) {
+            event.preventDefault();
+            choose(shown[active]);
+          } else if (event.key === "Escape") {
+            closeMenu();
+          }
+        }}
+      />
+      {menu ? createPortal(
+        <ul
+          id={listId}
+          ref={listRef}
+          role="listbox"
+          style={{ top: place.top, left: place.left, width: place.width, maxHeight: place.maxHeight }}
+          className="fixed z-30 overflow-auto rounded-md border bg-card p-1 shadow-md"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          {showChoices ? shown.map((name, index) => (
+            <li key={name} role="presentation">
+              <button
+                type="button"
+                role="option"
+                aria-selected={index === active}
+                ref={index === active ? activeRef : undefined}
+                className={cn(
+                  "flex w-full rounded-sm px-2 py-1 text-left text-base",
+                  index === active ? "bg-accent text-accent-foreground" : "hover:bg-accent hover:text-accent-foreground",
+                  name === value.trim() && "font-medium",
+                )}
+                onMouseEnter={() => {
+                  moved.current = true;
+                  setActive(index);
+                }}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  choosing.current = true;
+                  window.setTimeout(() => {
+                    choosing.current = false;
+                  }, 0);
+                }}
+                onClick={() => choose(name)}
+              >
+                <span className="truncate">{name}</span>
+              </button>
+            </li>
+          )) : (
+            <li className={cn("px-2 py-1 text-sm", note ? "text-destructive" : "text-muted-foreground")}>
+              {loading ? "Loading…" : note || empty}
+            </li>
+          )}
+        </ul>,
+        document.body,
+      ) : null}
+    </div>
+  );
 }
 
 function Field({

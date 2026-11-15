@@ -50,6 +50,27 @@ export function createBridge(): Bridge {
           receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
           return;
         }
+        if (command.type === 'repos') {
+          receive({
+            type: 'repos',
+            server: command.server,
+            error: false,
+            message: '',
+            repos: ['demo', 'site', 'tower'],
+          });
+          return;
+        }
+        if (command.type === 'branches') {
+          receive({
+            type: 'branches',
+            server: command.server,
+            repo: command.repo,
+            error: false,
+            message: '',
+            branches: command.repo === 'site' ? ['main', 'north'] : command.repo === 'tower' ? ['main'] : ['main', 'design', 'review'],
+          });
+          return;
+        }
         if (command.type === 'graph') {
           receive({
             type: 'graph',

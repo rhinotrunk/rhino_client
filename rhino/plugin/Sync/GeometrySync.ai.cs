@@ -66,6 +66,14 @@ public sealed class GeometrySync : IDisposable
     public Task<GraphResponse> LoadGraphAsync(string server, string repo, CancellationToken cancellationToken = default) =>
         Task.Run(() => LoadGraphCore(server, repo, cancellationToken), cancellationToken);
 
+    /// <summary>Repositories on the server, in the server's order. Does not change the document.</summary>
+    public Task<IReadOnlyList<string>> ListReposAsync(string server, CancellationToken cancellationToken = default) =>
+        Task.Run(() => ListReposCore(server, cancellationToken), cancellationToken);
+
+    /// <summary>Branches in the repository, in the server's order. An unknown repository has none.</summary>
+    public Task<IReadOnlyList<string>> ListBranchesAsync(string server, string repo, CancellationToken cancellationToken = default) =>
+        Task.Run(() => ListBranchesCore(server, repo, cancellationToken), cancellationToken);
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -254,6 +262,56 @@ public sealed class GeometrySync : IDisposable
         var client = ClientFor(bound.Server);
         await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
         return await client.GraphAsync(bound.Repo, ct: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<string>> ListReposCore(string server, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeServer(server);
+        try
+        {
+            return await FetchReposAsync(normalized, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException) when (LocalServer.IsLoopback(normalized))
+        {
+            await LocalServer.EnsureRunningAsync(normalized, cancellationToken).ConfigureAwait(false);
+            return await FetchReposAsync(normalized, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> FetchReposAsync(string server, CancellationToken cancellationToken)
+    {
+        var listed = await ClientFor(server).ListReposAsync(cancellationToken).ConfigureAwait(false);
+        return listed.Repos.Select(repo => repo.Name).ToList();
+    }
+
+    private async Task<IReadOnlyList<string>> ListBranchesCore(string server, string repo, CancellationToken cancellationToken)
+    {
+        var bound = NormalizeRepo(server, repo);
+        try
+        {
+            return await FetchBranchesAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException) when (LocalServer.IsLoopback(bound.Server))
+        {
+            await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
+            return await FetchBranchesAsync(bound, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> FetchBranchesAsync(ServerRepo bound, CancellationToken cancellationToken)
+    {
+        var client = ClientFor(bound.Server);
+        try
+        {
+            await client.GetRepoAsync(bound.Repo, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RhinoTrunkApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return [];
+        }
+
+        var listed = await client.ListBranchesAsync(bound.Repo, cancellationToken).ConfigureAwait(false);
+        return listed.Branches.Select(branch => branch.Name).ToList();
     }
 
     private async Task<IReadOnlyList<CommitChoice>> FetchCommitsAsync(Bound bound, CancellationToken cancellationToken)

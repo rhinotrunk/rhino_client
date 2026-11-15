@@ -83,7 +83,7 @@ scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends `ready`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `commits`, `status`, `graph`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+TypeScript sends `ready`, `repos`, `branches`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `repos`, `branches`, `commits`, `status`, `graph`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 
