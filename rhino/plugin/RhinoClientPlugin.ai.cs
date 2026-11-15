@@ -1,12 +1,15 @@
 using Rhino;
 using Rhino.PlugIns;
 using Rhino.UI;
+using RhinoClient.Sync;
 using RhinoClient.UI;
 
 namespace RhinoClient;
 
 public sealed class RhinoClientPlugin : PlugIn
 {
+    private PreviewConduit? _conduit;
+
     protected override LoadReturnCode OnLoad(ref string errorMessage)
     {
         if (RhinoApp.ExeVersion < 8 || (RhinoApp.ExeVersion == 8 && RhinoApp.ExeServiceRelease < 20))
@@ -15,6 +18,8 @@ public sealed class RhinoClientPlugin : PlugIn
             return LoadReturnCode.ErrorShowDialog;
         }
 
+        _conduit = PreviewConduit.Install();
+        _conduit.Hide();
         Panels.RegisterPanel(this, typeof(ClientPanel), "RhinoClient",
             typeof(RhinoClientPlugin).Assembly, "RhinoClient.panel.svg", PanelType.PerDoc);
         return LoadReturnCode.Success;
