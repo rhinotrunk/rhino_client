@@ -43,6 +43,8 @@ export function createBridge(): Bridge {
       if (!__PREVIEW__) return;
       queueMicrotask(() => {
         if (command.type === 'ready') {
+          const scheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          receive({ type: 'theme', scheme });
           receive({ type: 'session', server: 'http://localhost:5280/', repo: 'demo', branch: 'main' });
           receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
           return;

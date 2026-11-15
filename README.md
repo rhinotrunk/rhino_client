@@ -1,6 +1,6 @@
 # RhinoClient
 
-A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The result is written to Rhino's command history and, when the panel is open, shown under the buttons.
+A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The result of a pull or push is written to Rhino's command history and shown under the buttons.
 
 ## Requirements
 
@@ -69,16 +69,18 @@ rhino/
     UI/ClientPanel.ai.cs              Eto WebView host and pull/push actions
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
-    src/main.ts                      pull/push form and status
+    src/main.tsx                     React entry
+    src/panel.tsx                    pull/push form and status
+    src/components/ui/               shadcn button, input, label, card, badge, scroll area
     src/protocol/events.ts           TypeScript message definitions
     src/protocol/bridge.ts           native transport and browser preview
-    src/styles/panel.css             light/dark panel styles
+    src/styles/panel.css             Tailwind theme
     build.mjs                        bundle and self-contained HTML
 scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends `ready`, `pull`, and `push`. C# replies with `session`, `status`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+TypeScript sends `ready`, `commits`, `pull`, and `push`. C# replies with `session`, `commits`, `status`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 
