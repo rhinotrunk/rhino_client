@@ -96,3 +96,42 @@
   max-width: none;
   height: auto;
 }
+
+.history .commit-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.history .commit-checkout {
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.history:not(.is-busy) .commit-entry:hover .commit-row.is-placed .commit-checkout,
+.history:not(.is-busy) .commit-row.is-placed:hover .commit-checkout,
+.history:not(.is-busy) .commit-row.is-placed .commit-checkout:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.history .commit-checkout rect {
+  fill: var(--secondary);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.history .commit-checkout:focus-visible rect {
+  stroke: var(--ring);
+}
+
+.history .commit-checkout text {
+  fill: var(--secondary-foreground);
+  font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
+.history .commit-checkout:hover rect {
+  fill: var(--accent);
+}

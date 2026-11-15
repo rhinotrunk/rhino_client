@@ -70,15 +70,16 @@ public sealed class ClientPanel : Panel
             case "branches":
                 _ = SendBranches(Text(command, "server"), Text(command, "repo"));
                 break;
-            case "commits":
-                _ = SendCommits(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
-                break;
             case "graph":
                 _ = SendGraph(Text(command, "server"), Text(command, "repo"));
                 break;
             case "pull":
-                _ = Pull(new SyncTarget(
-                    Text(command, "server"), Text(command, "repo"), Text(command, "branch"), NullIfEmpty(Text(command, "commit"))));
+                _ = Pull(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                break;
+            case "checkout":
+                _ = Checkout(
+                    new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
+                    Text(command, "commit"));
                 break;
             case "push":
                 _ = Push(
@@ -90,14 +91,16 @@ public sealed class ClientPanel : Panel
 
     internal SyncTarget ReadTarget() => _sync.ReadTarget();
 
-    internal Task<IReadOnlyList<CommitChoice>> ListCommits(SyncTarget target) =>
-        _sync.ListCommitsAsync(target, _unload.Token);
+    internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) =>
+        RunAsync("Pulling…", token => _sync.PullAsync(target, interactive, token));
 
-    internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) => RunAsync(true, target, "", interactive);
+    internal Task<SyncResult> Checkout(SyncTarget target, string commit, bool interactive = true) =>
+        RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, interactive, token));
 
-    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync(false, target, message, true);
+    internal Task<SyncResult> Push(SyncTarget target, string message) =>
+        RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
 
-    private async Task<SyncResult> RunAsync(bool pull, SyncTarget target, string message, bool interactive)
+    private async Task<SyncResult> RunAsync(string busyMessage, Func<CancellationToken, Task<SyncResult>> action)
     {
         if (_closed) return SyncResult.Fail("The panel has closed.");
         if (_busy)
@@ -108,13 +111,11 @@ public sealed class ClientPanel : Panel
         }
 
         _busy = true;
-        _busyMessage = pull ? "Pulling…" : "Pushing…";
+        _busyMessage = busyMessage;
         SendStatus(_busyMessage, false, true);
         try
         {
-            var result = pull
-                ? await _sync.PullAsync(target, interactive, _unload.Token)
-                : await _sync.PushAsync(target, message, _unload.Token);
+            var result = await action(_unload.Token);
             _busy = false;
             SendStatus(result.Message, !result.Ok, false);
             return result;
@@ -184,31 +185,6 @@ public sealed class ClientPanel : Panel
         }
     }
 
-    private async Task SendCommits(SyncTarget target)
-    {
-        if (_closed || _busy) return;
-        try
-        {
-            var commits = await _sync.ListCommitsAsync(target, _unload.Token);
-            if (_closed) return;
-            Post(new
-            {
-                type = "commits",
-                commits = commits.Select(commit => new { id = commit.Id, message = commit.Message }),
-                error = false,
-                message = "",
-            });
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
-        {
-            if (_closed) return;
-            Post(new { type = "commits", commits = Array.Empty<CommitChoice>(), error = true, message = ex.Message });
-        }
-    }
-
     private async Task SendGraph(string server, string repo)
     {
         if (_closed || _busy) return;
@@ -264,8 +240,6 @@ public sealed class ClientPanel : Panel
             _bridge.Post(message);
         });
     }
-
-    private static string? NullIfEmpty(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private void SendSession()
     {

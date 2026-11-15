@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,12 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { renderHistory } from "./graph/render";
-import { shortHash } from "./graph/story";
 import { createBridge } from "./protocol/bridge";
-import type { CommitSummary, GraphCommit } from "./protocol/events";
+import type { GraphCommit } from "./protocol/events";
 import { cn } from "@/lib/utils";
 
-type Pin = { id: string; message: string };
 type History = {
   repo: string;
   commits: GraphCommit[];
@@ -29,11 +27,7 @@ export function Panel() {
   const [server, setServer] = useState("http://localhost:5280/");
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("main");
-  const [commit, setCommit] = useState("");
-  const [pin, setPin] = useState<Pin | null>(null);
   const [message, setMessage] = useState("Update geometry");
-  const [commitChoices, setCommitChoices] = useState<CommitSummary[] | null>(null);
-  const [commitOpen, setCommitOpen] = useState(false);
   const [status, setStatus] = useState(connected ? "Connecting…" : "Could not connect to Rhino.");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -51,11 +45,13 @@ export function Panel() {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchNote, setBranchNote] = useState("");
   const [branchesLoading, setBranchesLoading] = useState(false);
+  const [listedBranchServer, setListedBranchServer] = useState("");
   const [listedBranchRepo, setListedBranchRepo] = useState("");
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
   const repoRequest = useRef("");
   const branchRequest = useRef({ server: "", repo: "" });
   const hostRef = useRef<HTMLDivElement>(null);
+  const checkoutRef = useRef<(id: string) => void>(() => {});
   const disabled = !ready || busy;
 
   useLayoutEffect(() => {
@@ -84,17 +80,8 @@ export function Panel() {
         setBranchesLoading(false);
         setBranches(event.error ? [] : event.branches);
         setBranchNote(event.error ? event.message : "");
+        setListedBranchServer(event.server);
         setListedBranchRepo(event.repo);
-      } else if (event.type === "commits") {
-        if (event.error || event.commits.length === 0) {
-          setCommitChoices(null);
-          if (event.error) {
-            setError(true);
-            setStatus(event.message);
-          }
-          return;
-        }
-        setCommitChoices(event.commits);
       } else if (event.type === "graph") {
         if (event.repo !== query.current.repo) return;
         setHistory({
@@ -136,8 +123,12 @@ export function Panel() {
   useEffect(() => {
     const host = hostRef.current;
     if (!host || history.commits.length === 0) return;
-    renderHistory(host, history.commits, scheme);
+    renderHistory(host, history.commits, scheme, (id) => checkoutRef.current(id));
   }, [history.commits, scheme]);
+
+  useEffect(() => {
+    hostRef.current?.classList.toggle("is-busy", disabled);
+  }, [disabled, history.commits]);
 
   function snapshot() {
     const next = { server: server.trim(), repo: repo.trim() };
@@ -176,6 +167,7 @@ export function Panel() {
       setBranches([]);
       setBranchNote(nextServer && !nextRepo ? "Enter a repository first." : "");
       setBranchesLoading(false);
+      setListedBranchServer(nextServer);
       setListedBranchRepo(nextRepo);
       return;
     }
@@ -194,20 +186,22 @@ export function Panel() {
     remember(server, value);
   }
 
-  function chosen() {
-    const text = commit.trim();
-    if (pin && (text === pin.id || text === pin.message)) return pin.id;
-    return text;
-  }
-
   function onPull() {
     const spec = snapshot();
     setBusy(true);
     setError(false);
     setStatus("Pulling…");
-    setCommitOpen(false);
-    bridge.send({ type: "pull", ...spec, branch: branch.trim(), commit: chosen() });
+    bridge.send({ type: "pull", ...spec, branch: branch.trim() });
   }
+
+  checkoutRef.current = (id: string) => {
+    if (!ready || busy) return;
+    const spec = snapshot();
+    setBusy(true);
+    setError(false);
+    setStatus("Checking out…");
+    bridge.send({ type: "checkout", ...spec, branch: branch.trim(), commit: id });
+  };
 
   function onPush() {
     const spec = snapshot();
@@ -218,7 +212,6 @@ export function Panel() {
   }
 
   const note = historyNote(history, requestedRepo, ready);
-  const showChoices = commitOpen && commitChoices !== null && commitChoices.length > 0;
 
   return (
     <div className="h-full overflow-y-auto bg-background p-2 text-foreground">
@@ -249,62 +242,12 @@ export function Panel() {
               label="Branch"
               value={branch}
               onChange={setBranch}
-              options={listedBranchRepo === repo.trim() ? branches : []}
-              note={listedBranchRepo === repo.trim() ? branchNote : ""}
+              options={listedBranchServer === server.trim() && listedBranchRepo === repo.trim() ? branches : []}
+              note={listedBranchServer === server.trim() && listedBranchRepo === repo.trim() ? branchNote : ""}
               loading={branchesLoading}
               empty="No branches yet."
               onOpen={() => requestBranches()}
             />
-            <Field
-              label="Commit"
-              value={commit}
-              placeholder="Branch tip"
-              onChange={(value) => {
-                setCommit(value);
-                setPin((current) => {
-                  if (!current) return null;
-                  const text = value.trim();
-                  return text === current.id || text === current.message ? current : null;
-                });
-              }}
-              onFocus={() => {
-                setCommitOpen(true);
-                if (!repo.trim()) return;
-                bridge.send({ type: "commits", server: server.trim(), repo: repo.trim(), branch: branch.trim() });
-              }}
-              onBlur={() => setCommitOpen(false)}
-            >
-              {showChoices ? (
-                <ScrollArea
-                  type="auto"
-                  className="rounded-md border"
-                  style={{ height: Math.min(commitChoices.length * 48, 180) }}
-                >
-                  <ul>
-                    {commitChoices.map((item) => (
-                      <li key={item.id}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto w-full justify-start rounded-none px-2 py-1.5 text-left font-normal"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => {
-                            setCommit(item.message);
-                            setPin({ id: item.id, message: item.message });
-                            setCommitOpen(false);
-                          }}
-                        >
-                          <span className="flex min-w-0 flex-1 flex-col items-start">
-                            <span className="w-full truncate">{item.message || "(no message)"}</span>
-                            <span className="font-mono text-xs text-muted-foreground">{shortHash(item.id)}</span>
-                          </span>
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </ScrollArea>
-              ) : null}
-            </Field>
             <Field label="Message" value={message} onChange={setMessage} />
           </div>
           <div className="flex gap-2">
@@ -572,32 +515,17 @@ function Field({
   value,
   onChange,
   onBlur,
-  onFocus,
-  placeholder,
-  children,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   onBlur?: () => void;
-  onFocus?: () => void;
-  placeholder?: string;
-  children?: ReactNode;
 }) {
   const id = useId();
   return (
     <div className="grid gap-1">
       <Label htmlFor={id} className="text-muted-foreground">{label}</Label>
-      <Input
-        id={id}
-        className="h-8"
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        onBlur={onBlur}
-        onFocus={onFocus}
-      />
-      {children}
+      <Input id={id} className="h-8" value={value} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />
     </div>
   );
 }

@@ -82,22 +82,13 @@ export function createBridge(): Bridge {
           });
           return;
         }
-        if (command.type === 'commits') {
-          receive({
-            type: 'commits',
-            error: false,
-            message: '',
-            commits: [
-              { id: 'sha256:' + 'a'.repeat(64), message: 'Update geometry' },
-              { id: 'sha256:' + 'b'.repeat(64), message: 'Initial commit' },
-            ],
-          });
-          return;
-        }
-        const verb = command.type === 'pull' ? 'Pull' : 'Push';
+        const detail =
+          command.type === 'checkout'
+            ? `checkout ${command.commit.replace(/^sha256:/, '').slice(0, 8)}`
+            : `${command.type} ${command.repo} ${command.branch}`;
         receive({
           type: 'status',
-          message: `Preview ${verb.toLowerCase()} ${command.repo} ${command.branch}`,
+          message: `Preview ${detail}`,
           error: false,
           busy: false,
         });

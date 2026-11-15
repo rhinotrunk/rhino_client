@@ -1,6 +1,6 @@
 # RhinoClient
 
-A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. The result of a pull or push is written to Rhino's command history and shown under the buttons.
+A minimal dockable Rhino panel. Run **RhinoClient** to open it, or run **RhinoClientPull** and **RhinoClientPush** from the command line. Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ Once Rhino opens, run `RhinoClient`. The panel uses Rhino's standard docking sys
 
 A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for `git_engine` next to itself and runs it with `dotnet`. Set `RHINOTRUNK_SERVER_PROJECT` to the server `.csproj` if that project lives somewhere else.
 
-`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. `Commit` on pull lists recent commit messages; click one, or type a message or a commit id. Leave it empty to pull the branch tip. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
+`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
 
 `npm start` launches Rhino 8 with `RHINO_PACKAGE_DIRS` pointing to the build output. It does not use an already running Rhino instance. Restart this development instance after changing C# or rebuilding the embedded UI.
 
@@ -83,7 +83,7 @@ scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends `ready`, `repos`, `branches`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `repos`, `branches`, `commits`, `status`, `graph`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+TypeScript sends `ready`, `repos`, `branches`, `pull`, `checkout`, `push`, and `graph`. C# replies with `session`, `repos`, `branches`, `status`, `graph`, and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 
