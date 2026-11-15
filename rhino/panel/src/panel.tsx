@@ -130,13 +130,13 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   }, [disabled, history.commits]);
 
   function snapshot() {
-    const next = { server: server.trim(), repo: repo.trim() };
+    const next = { server: server.trim(), repo: toRepoName(repo) };
     query.current = next;
     return next;
   }
 
   function remember(nextServer = server, nextRepo = repo) {
-    const next = { server: nextServer.trim(), repo: nextRepo.trim() };
+    const next = { server: nextServer.trim(), repo: toRepoName(nextRepo) };
     const changed = next.server !== query.current.server || next.repo !== query.current.repo;
     query.current = next;
     if (changed) setTick((value) => value + 1);
@@ -160,7 +160,7 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   function requestBranches(serverValue = server, repoValue = repo) {
     if (bridge.kind === "unavailable") return;
     const nextServer = serverValue.trim();
-    const nextRepo = repoValue.trim();
+    const nextRepo = toRepoName(repoValue);
     branchRequest.current = { server: nextServer, repo: nextRepo };
     if (!nextServer || !nextRepo) {
       setBranches([]);
@@ -176,13 +176,14 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   }
 
   function chooseRepo(value: string) {
-    setRepo(value);
-    if (value.trim() !== listedBranchRepo) {
+    const name = toRepoName(value);
+    setRepo(name);
+    if (name !== listedBranchRepo) {
       setBranches([]);
       setBranchNote("");
       setListedBranchRepo("");
     }
-    remember(server, value);
+    remember(server, name);
   }
 
   function onPull() {
@@ -241,8 +242,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
               label="Branch"
               value={branch}
               onChange={setBranch}
-              options={listedBranchServer === server.trim() && listedBranchRepo === repo.trim() ? branches : []}
-              note={listedBranchServer === server.trim() && listedBranchRepo === repo.trim() ? branchNote : ""}
+              options={listedBranchServer === server.trim() && listedBranchRepo === toRepoName(repo) ? branches : []}
+              note={listedBranchServer === server.trim() && listedBranchRepo === toRepoName(repo) ? branchNote : ""}
               loading={branchesLoading}
               empty="No branches yet."
               onOpen={() => requestBranches()}
@@ -279,6 +280,23 @@ export function Panel({ bridge }: { bridge: Bridge }) {
       </Card>
     </div>
   );
+}
+
+// Mirrors Names.IsValidRepo in the git engine.
+const validRepo = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+function toRepoName(value: string): string {
+  const text = value.trim();
+  if (validRepo.test(text)) return text;
+  const name = text
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+/, "")
+    .slice(0, 64)
+    .replace(/[._-]+$/, "");
+  return name || text;
 }
 
 function historyNote(history: History, requestedRepo: string, ready: boolean): string | null {
