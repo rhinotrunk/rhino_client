@@ -78,9 +78,46 @@ public sealed partial class GeometrySync : IDisposable
     public Task<SyncResult> CheckoutAsync(SyncTarget target, string commit, CancellationToken cancellationToken = default) =>
         CheckoutAsync(target, commit, interactive: true, cancellationToken);
 
-    /// <summary>Checks out a commit into the document. A scripted checkout stops instead of prompting on conflicts.</summary>
+    /// <summary>
+    /// Switches the document to a commit: afterwards it matches that commit exactly. Checkout is not a merge, so there
+    /// is no conflict review. Unpushed changes would be lost, so an interactive checkout asks once before discarding
+    /// them and a scripted one stops.
+    /// </summary>
     public Task<SyncResult> CheckoutAsync(SyncTarget target, string commit, bool interactive, CancellationToken cancellationToken = default) =>
-        Run(() => PullCore(target, commit, interactive, cancellationToken), cancellationToken);
+        Run(() => CheckoutCore(target, commit, interactive, cancellationToken), cancellationToken);
+
+    private async Task<SyncResult> CheckoutCore(SyncTarget target, string commit, bool interactive, CancellationToken cancellationToken)
+    {
+        var repo = NormalizeRepo(target.Server, target.Repo);
+        var client = ClientFor(repo.Server);
+        var sameRepo = OnUi(() =>
+        {
+            _copy.Require();
+            _copy.Read();
+            return string.Equals(_copy.Server, repo.Server, StringComparison.OrdinalIgnoreCase) && _copy.Repo == repo.Repo;
+        });
+        if (sameRepo)
+        {
+            await EnsureBaseMapAsync(client, repo.Repo, cancellationToken).ConfigureAwait(false);
+            var local = await CaptureLocalAsync(client, repo.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false);
+            if (local.Changes.Count > 0)
+            {
+                if (!interactive)
+                    return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them, or pull with Discard, before checking out another commit.");
+                var discard = OnUi(() =>
+                {
+                    var get = new Rhino.Input.Custom.GetOption();
+                    get.SetCommandPrompt($"Checkout switches the model to {ShortCommit(commit)} and discards {local.Changes.Count} unpushed changes");
+                    var yes = get.AddOption("Discard");
+                    get.AddOption("Cancel");
+                    return get.Get() == Rhino.Input.GetResult.Option && get.Option()?.Index == yes;
+                });
+                if (!discard) return SyncResult.Fail("Checkout cancelled. Your changes are untouched.");
+            }
+        }
+
+        return await PullCore(target, commit, interactive: false, cancellationToken, discardLocal: true).ConfigureAwait(false);
+    }
 
     /// <summary>Commits reachable from every ref, newest first. Does not change the document.</summary>
     public Task<GraphResponse> LoadGraphAsync(string server, string repo, CancellationToken cancellationToken = default) =>

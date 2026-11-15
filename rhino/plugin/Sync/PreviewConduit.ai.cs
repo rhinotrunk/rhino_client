@@ -71,15 +71,24 @@ internal sealed class PreviewConduit : DisplayConduit
             if (e.RhinoDoc?.Objects.FindId(copy.ObjectId) is { IsDeleted: false } obj) display.DrawObject(obj, copy.Transform);
         }
 
+        // GLSL outlines first, all in one go; the shaded meshes drawn next cover their inner half.
+        var outlined = scene.Items.Where(item => item.Silhouette && Drawable(item) && item.Mesh is { Vertices.Count: > 0 })
+            .Select(item => (item.Mesh!, item.Outline, (float)item.OutlineWidth)).ToList();
+        var glsl = OutlineRenderer.Draw(e.Viewport, outlined);
+
         for (var pass = 0; pass < 2; pass++)
         {
             var opaquePass = pass == 0;
             foreach (var item in scene.Items)
             {
                 if ((item.Transparency <= 0.001) != opaquePass) continue;
+                if (!Drawable(item)) continue;
                 if (item.Mesh is { Vertices.Count: > 0 } mesh)
                 {
-                    if (item.Silhouette)
+                    if (item.Silhouette && glsl)
+                    {
+                    }
+                    else if (item.Silhouette)
                     {
                         // The outline is drawn first, thick and depth tested, so the shaded mesh drawn over it
                         // covers its inner half: what remains reads as an outline beneath the object.
@@ -126,6 +135,12 @@ internal sealed class PreviewConduit : DisplayConduit
             y += i == 0 ? 20 : 17;
         }
     }
+
+    /// <summary>
+    /// A preview must never take Rhino down: geometry that has been disposed since the scene was built is skipped.
+    /// </summary>
+    private static bool Drawable(PreviewDrawable item) =>
+        (item.Mesh is null || !item.Mesh.Disposed) && (item.Curve is null || !item.Curve.Disposed) && (item.Cloud is null || !item.Cloud.Disposed);
 
     private readonly Dictionary<PreviewDrawable, (string Camera, Curve[] Curves)> _silhouettes = new();
 

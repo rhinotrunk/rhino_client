@@ -29,7 +29,13 @@ public sealed partial class GeometrySync
     internal static readonly Color RemovedColor = Color.FromArgb(235, 40, 40);
     internal static readonly Color ModifiedColor = Color.FromArgb(40, 120, 255);
     internal static readonly Color NeutralColor = Color.FromArgb(150, 150, 150);
-    private const double GhostTransparency = 0.7;
+    /// <summary>Removed objects show at 10% opacity inside their red outline.</summary>
+    private const double GhostTransparency = 0.9;
+    private const int OutlinePixels = 3;
+
+    /// <summary>A light tint of a change colour for the object's fill; the outline carries the full colour.</summary>
+    internal static Color Tint(Color color, double amount = 0.3) => Color.FromArgb(
+        (int)(225 + (color.R - 225) * amount), (int)(225 + (color.G - 225) * amount), (int)(225 + (color.B - 225) * amount));
 
     /// <summary>Creates a branch at the commit the model is on, records its parent branch, and switches the model to it.</summary>
     public Task<SyncResult> CreateBranchAsync(SyncTarget current, string name, CancellationToken cancellationToken = default) =>
@@ -461,13 +467,13 @@ public sealed partial class GeometrySync
             switch (change.Change)
             {
                 case DiffChanges.Added:
-                    AddShape(scene, Geometry(geometry, change.ToManifest), AddedColor, ghost ? 0.4 : 0, shift);
+                    AddShape(scene, Geometry(geometry, change.ToManifest), Tint(AddedColor), AddedColor, ghost ? 0.4 : 0, shift);
                     break;
                 case DiffChanges.Modified:
-                    AddShape(scene, Geometry(geometry, change.ToManifest), ModifiedColor, ghost ? 0.4 : 0, shift);
+                    AddShape(scene, Geometry(geometry, change.ToManifest), Tint(ModifiedColor), ModifiedColor, ghost ? 0.4 : 0, shift);
                     break;
                 default:
-                    AddShape(scene, Geometry(geometry, change.FromManifest) ?? doc.Objects.FindId(id)?.Geometry, RemovedColor, GhostTransparency, shift);
+                    AddShape(scene, Geometry(geometry, change.FromManifest) ?? doc.Objects.FindId(id)?.Geometry, NeutralColor, RemovedColor, GhostTransparency, shift);
                     break;
             }
         }
@@ -477,13 +483,13 @@ public sealed partial class GeometrySync
             var id = Guid.Parse(change.Id);
             if (hide) scene.Hidden.Add(id);
             if (change.Change != DiffChanges.Deleted)
-                AddShape(scene, Geometry(geometry, change.ToManifest), NeutralColor, 0, shift, silhouette: false);
+                AddShape(scene, Geometry(geometry, change.ToManifest), NeutralColor, NeutralColor, 0, shift, silhouette: false);
         }
 
         foreach (var drawable in scene.Items) scene.Bounds = Union(scene.Bounds, drawable.Mesh?.GetBoundingBox(false) ?? drawable.Curve?.GetBoundingBox(false) ?? BoundingBox.Empty);
     }
 
-    private static void AddShape(PreviewScene scene, GeometryBase? source, Color color, double transparency, Transform shift, bool silhouette = true)
+    private static void AddShape(PreviewScene scene, GeometryBase? source, Color fill, Color outline, double transparency, Transform shift, bool silhouette = true)
     {
         if (source is null) return;
         using var moved = source.Duplicate();
@@ -497,10 +503,10 @@ public sealed partial class GeometrySync
             Curve = shape.Curve,
             Point = shape.Point,
             Cloud = shape.Cloud,
-            Fill = color,
-            Outline = color,
+            Fill = fill,
+            Outline = outline,
             Transparency = transparency,
-            OutlineWidth = 2,
+            OutlineWidth = OutlinePixels,
             Silhouette = silhouette,
         });
     }

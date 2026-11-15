@@ -253,17 +253,22 @@ public sealed partial class GeometrySync
 
     private int _previewGeneration;
 
+    /// <summary>
+    /// Caches a shape. Cached shapes may be on screen in a scene at any time, so they are never disposed here:
+    /// a duplicate (a prefetch and a click loading the same commit at once) loses and is disposed instead, and an
+    /// overflowing cache is only forgotten, leaving its shapes to the garbage collector once no scene draws them.
+    /// </summary>
     private void Remember(string hash, CapturedShape shape)
     {
         lock (_previewGate)
         {
-            if (_shapes.Count > 20000)
+            if (_shapes.ContainsKey(hash))
             {
-                foreach (var old in _shapes.Values) old.Dispose();
-                _shapes.Clear();
+                shape.Dispose();
+                return;
             }
 
-            if (_shapes.TryGetValue(hash, out var existing)) existing.Dispose();
+            if (_shapes.Count > 20000) _shapes.Clear();
             _shapes[hash] = shape;
         }
     }
@@ -301,7 +306,7 @@ public sealed partial class GeometrySync
                 {
                     var ghost = CapturedShape.From(current);
                     scene.Owned.Add(ghost);
-                    AddCached(scene, ghost, RemovedColor, GhostTransparency);
+                    AddCached(scene, ghost, NeutralColor, RemovedColor, GhostTransparency);
                 }
 
                 continue;
@@ -310,7 +315,10 @@ public sealed partial class GeometrySync
             if (change.Change == DiffChanges.Added) added++;
             else modified++;
             if (CachedShape(change.ToManifest) is { } shape)
-                AddCached(scene, shape, change.Change == DiffChanges.Added ? AddedColor : ModifiedColor, 0);
+            {
+                var color = change.Change == DiffChanges.Added ? AddedColor : ModifiedColor;
+                AddCached(scene, shape, Tint(color), color, 0);
+            }
         }
 
         foreach (var item in scene.Items)
@@ -318,7 +326,7 @@ public sealed partial class GeometrySync
         return (added, modified, removed);
     }
 
-    private static PreviewDrawable? AddCached(PreviewScene scene, CapturedShape shape, Color color, double transparency, int width = 2)
+    private static PreviewDrawable? AddCached(PreviewScene scene, CapturedShape shape, Color fill, Color outline, double transparency, int width = OutlinePixels)
     {
         if (!shape.HasDrawable) return null;
         var drawable = new PreviewDrawable
@@ -327,8 +335,8 @@ public sealed partial class GeometrySync
             Curve = shape.Curve,
             Point = shape.Point,
             Cloud = shape.Cloud,
-            Fill = color,
-            Outline = color,
+            Fill = fill,
+            Outline = outline,
             Transparency = transparency,
             OutlineWidth = width,
             Silhouette = true,
@@ -573,7 +581,10 @@ public sealed partial class GeometrySync
                 }
 
                 if (shape is null) continue;
-                var drawable = AddCached(scene, shape, color, taken ? (offer.Change == DiffChanges.Deleted ? GhostTransparency : 0) : 0.85, taken ? 3 : 1);
+                var deleted = offer.Change == DiffChanges.Deleted;
+                var drawable = taken
+                    ? AddCached(scene, shape, deleted ? NeutralColor : Tint(color), color, deleted ? GhostTransparency : 0, OutlinePixels)
+                    : AddCached(scene, shape, color, color, 0.85, 1);
                 if (drawable is not null) state.Pickable.Add((drawable, id, i));
             }
         }

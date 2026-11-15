@@ -8,6 +8,25 @@ let fitted: MutationObserver | undefined;
 // Commits the user has clicked, in click order. Shift-click adds or removes one; a plain click selects only it.
 let selection: string[] = [];
 let shiftHeld = false;
+// Set by a click that selected a commit, so the document-level click-away handler leaves that click alone.
+let clickedCommit = false;
+let current: { container: HTMLElement; hashes: Map<string, string>; handlers: GraphHandlers } | undefined;
+let clickAwayInstalled = false;
+
+// A click anywhere that is not on a commit ends a single-commit preview: the viewport goes back to the model as
+// pulled. Merge picking (two or more commits) is not cancelled by a stray click; clicking its dots changes it.
+function installClickAway(): void {
+  if (clickAwayInstalled) return;
+  clickAwayInstalled = true;
+  document.addEventListener("click", () => {
+    const onCommit = clickedCommit;
+    clickedCommit = false;
+    if (onCommit || !current || selection.length !== 1) return;
+    selection = [];
+    markSelection(current.container, current.hashes);
+    current.handlers.onSelect([]);
+  });
+}
 
 export type GraphHandlers = {
   onCheckout: (id: string) => void;
@@ -88,8 +107,11 @@ export function renderHistory(
 
   const ids = new Map(commits.map((commit) => [graphHash(commit.id), commit.id]));
   const hashes = new Map(commits.map((commit) => [commit.id, graphHash(commit.id)]));
+  current = { container, hashes, handlers };
+  installClickAway();
   const select = (id: string) => {
     if (!id) return;
+    clickedCommit = true;
     if (shiftHeld) selection = selection.includes(id) ? selection.filter((other) => other !== id) : [...selection, id];
     else selection = selection.length === 1 && selection[0] === id ? [] : [id];
     markSelection(container, hashes);
