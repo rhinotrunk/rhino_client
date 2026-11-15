@@ -1,5 +1,6 @@
 import type { HostEvent, PanelCommand } from './events';
 import { createPreview } from './preview';
+import { repoPreview } from './repoPreview';
 declare const __PREVIEW__: boolean;
 type Listener = (event: HostEvent) => void;
 type Transport = { postMessage(message: string): void };
@@ -26,7 +27,7 @@ export function createBridge(): Bridge {
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     send(command) {
       if (transport) transport.postMessage(JSON.stringify(command));
-      else if (preview) preview(command);
+      else if (preview) { if (!repoPreview(command, receive)) preview(command); }
     },
   };
 }

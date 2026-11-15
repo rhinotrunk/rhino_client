@@ -1,8 +1,9 @@
 import './styles/panel.css';
 import { createRoot } from 'react-dom/client';
-import { Component } from 'react';
+import { Component, useState } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { App } from './app';
+import { Panel } from './panel';
 import { createBridge } from './protocol/bridge';
 
 const root = document.getElementById('root');
@@ -36,4 +37,21 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: str
     return this.props.children;
   }
 }
-createRoot(root).render(<PanelErrorBoundary><App bridge={bridge} /></PanelErrorBoundary>);
+// Repository (git version control) comes first; Agents (AI tasks) second. Both stay mounted so
+// neither loses state when you switch tabs.
+const tabs = [{ id: 'repository', label: 'Repository' }, { id: 'agents', label: 'Agents' }] as const;
+function Shell() {
+  const [tab, setTab] = useState<(typeof tabs)[number]['id']>('repository');
+  return <div className="flex h-full flex-col bg-background text-foreground">
+    <div role="tablist" aria-label="RhinoClient" className="flex shrink-0 gap-1 border-b bg-card px-2 pt-1.5">
+      {tabs.map(t => <button key={t.id} role="tab" id={`tab-${t.id}`} aria-selected={tab === t.id} aria-controls={`pane-${t.id}`} type="button"
+        onClick={() => setTab(t.id)}
+        className={`-mb-px rounded-t-md border border-b-0 px-3 py-1.5 text-sm ${tab === t.id ? 'border-border bg-background font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>{t.label}</button>)}
+    </div>
+    <div className="relative min-h-0 flex-1">
+      <div role="tabpanel" id="pane-repository" aria-labelledby="tab-repository" hidden={tab !== 'repository'} className="absolute inset-0"><Panel bridge={bridge} /></div>
+      <div role="tabpanel" id="pane-agents" aria-labelledby="tab-agents" hidden={tab !== 'agents'} className="agents absolute inset-0"><PanelErrorBoundary><App bridge={bridge} /></PanelErrorBoundary></div>
+    </div>
+  </div>;
+}
+createRoot(root).render(<Shell />);

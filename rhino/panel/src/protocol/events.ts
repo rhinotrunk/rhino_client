@@ -1,3 +1,8 @@
+export type CommitSummary = { id: string; message: string };
+export type GraphAuthor = { id: string; name?: string | null; kind: string };
+export type GraphCommit = {
+  id: string; parents: string[]; generation: number; timestamp: string; message: string; author: GraphAuthor; refs: string[];
+};
 export type Scope = { wholeDocument?: boolean; objectIds: string[]; layerIds: string[] };
 export type TaskStatus = 'draft' | 'queued' | 'running' | 'stopping' | 'stopped' | 'ready' | 'failed' | 'interrupted';
 export type Activity = { kind: 'user' | 'assistant' | 'tool' | 'result' | 'error' | 'status'; text: string; at: string };
@@ -27,11 +32,19 @@ export type PanelCommand =
   | { type: 'task.add'; sessionId: string; id?: string; launch?: boolean; branchFromResult?: boolean; title: string; instructions: string; parentId?: string; scope: Scope }
   | { type: 'task.update'; id: string; title: string; instructions: string; scope: Scope }
   | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show'; id: string }
-  | { type: 'task.message'; id: string; message: string };
+  | { type: 'task.message'; id: string; message: string }
+  | { type: 'commits'; server: string; repo: string; branch: string }
+  | { type: 'pull'; server: string; repo: string; branch: string; commit: string }
+  | { type: 'push'; server: string; repo: string; branch: string; message: string }
+  | { type: 'graph'; server: string; repo: string };
 export type HostEvent =
   | { type: 'control.state' } & ControlState
   | { type: 'control.error'; message: string }
   | { type: 'scope.selection'; objectIds: string[] }
+  | { type: 'session'; server: string; repo: string; branch: string }
+  | { type: 'commits'; commits: CommitSummary[]; message: string; error: boolean }
+  | { type: 'graph'; repo: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
+  | { type: 'status'; message: string; error: boolean; busy: boolean }
   | { type: 'theme'; scheme: 'light' | 'dark' };
 
 export function newId(): string {

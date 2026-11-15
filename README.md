@@ -1,8 +1,16 @@
 # RhinoClient
 
-A dockable Rhino agent control plane. Run **RhinoClient** in Rhino's command line to open it. Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
+A dockable Rhino panel with two tabs. **Repository** (first) is git-style version control for the model: pull, push, and a history graph. **Agents** (second) is the AI control plane: Codex workers propose changes to a copy of the model. Run **RhinoClient** in Rhino's command line to open the panel, or run **RhinoClientPull** and **RhinoClientPush** from the command line.
 
-Git history and PR acceptance are deferred. “PR ready” currently means a saved local task result, available through **Inspect document copy**. The source model is not changed by task workers.
+## Repository tab
+
+Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. The result of a pull or push is written to Rhino's command history and shown under the buttons.
+
+## Agents tab
+
+Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
+
+Creating a git branch and pull request for each proposed result, and merging it on approval, is being integrated on `feature/MCP-merging`. Until then, “PR ready” currently means a saved local task result, available through **Inspect document copy**. The source model is not changed by task workers.
 
 ## Try a session
 
@@ -40,6 +48,10 @@ npm start
 
 Once Rhino opens, run `RhinoClient`. The panel uses Rhino's standard docking system: dock it with other panels or float it. Repeating the command opens/selects the existing panel.
 
+A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for `git_engine` next to itself and runs it with `dotnet`. Set `RHINOTRUNK_SERVER_PROJECT` to the server `.csproj` if that project lives somewhere else.
+
+`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. `Commit` on pull lists recent commit messages; click one, or type a message or a commit id. Leave it empty to pull the branch tip. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
+
 `npm start` launches Rhino 8 with `RHINO_PACKAGE_DIRS` pointing to the build output. It does not use an already running Rhino instance. Restart this development instance after changing C# or rebuilding the embedded UI.
 
 The build script finds the .NET 8 SDK on PATH or in `~/.dotnet`. Set `RHINOCLIENT_DOTNET` to an explicit `dotnet` executable if needed. Set `RHINOCLIENT_RHINO` to override the Rhino executable used by `npm start`.
@@ -52,7 +64,7 @@ Output: `rhino/plugin/bin/Debug/net8.0/RhinoClient.rhp`. For a release build, ru
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates session planning and task execution without Rhino or model requests. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
+Open <http://127.0.0.1:5173/panel.html>. TypeScript and CSS changes rebuild and reload the page automatically. Preview mode simulates the host response: Pull and Push show a status without Rhino or the server, the history card draws a sample graph, and the Agents tab simulates session planning and task execution without Rhino or model requests. `npm run typecheck` checks TypeScript independently; the dev server checks types at startup, then uses esbuild for fast rebuilds.
 
 ## Live reload inside Rhino
 
@@ -62,7 +74,7 @@ Build the Debug plugin once with `npm run build`. Start `npm run dev` in one ter
 npm run start:dev
 ```
 
-Run `RhinoClient` in the new Rhino instance. This Debug-only mode loads <http://127.0.0.1:5173/panel.host.html> with the real Rhino bridge. Saving TypeScript or CSS automatically rebuilds and reloads the panel without restarting Rhino. Reloads reset view state; sessions and tasks are owned by C# and sent back when the page reconnects. C# changes still require a rebuild and Rhino restart.
+Run `RhinoClient` in the new Rhino instance. This Debug-only mode loads <http://127.0.0.1:5173/panel.host.html> with the real Rhino bridge. Saving TypeScript or CSS automatically rebuilds and reloads the panel without restarting Rhino. Reloads reset view state; the document's saved server, repository, and branch, and the sessions and tasks owned by C#, are sent back when the page reconnects. C# changes still require a rebuild and Rhino restart.
 
 Keep the dev server running while using this mode. Regular `npm start` uses the embedded UI, and Release builds always use the embedded UI.
 
@@ -79,35 +91,29 @@ rhino/
   plugin/
     RhinoClientPlugin.ai.cs           plugin entry point and panel registration
     Commands/RhinoClientCommand.ai.cs command that opens the panel
-    UI/ClientPanel.ai.cs              Eto WebView host and control-plane adapter
-    Agent/                           sessions, task supervisor, Codex runner, scoped MCP tools
+    Commands/GeometryCommands.ai.cs   RhinoClientPull and RhinoClientPush
+    UI/ClientPanel.ai.cs              Eto WebView host: routes git sync and agent control messages
+    Sync/                             pull/push, working copy, document mapper (RhinoTrunk client)
+    Agent/                            sessions, task supervisor, Codex runner, scoped MCP tools
     UI/PanelBridge.ai.cs              JSON messages and page lifecycle
   panel/
-    src/main.tsx                     React entry point
-    src/app.tsx                      session list, chat, task tree and execution controls
-    src/components/ui/               local shadcn/ui components
+    src/main.tsx                     React entry and the Repository / Agents tab shell
+    src/panel.tsx                    Repository tab: pull, push, and history card
+    src/app.tsx                      Agents tab: session list, chat, task tree and execution controls
+    src/graph/story.ts               oldest-first branch walk
+    src/graph/render.ts              gitgraph drawing
+    src/graph/fixture.ts             browser preview history
+    src/components/ui/               shadcn button, input, label, card, badge, scroll area
     src/protocol/events.ts           TypeScript message definitions
     src/protocol/bridge.ts           native transport and browser preview
-    src/styles/panel.css             light/dark panel styles
+    src/styles/panel.css             Tailwind theme
     build.mjs                        bundle and self-contained HTML
 scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-TypeScript sends session, task, settings and scope commands. C# replies with `control.state`, `control.error`, selection results and `theme`, using `window.rhinoClient.receive(...)`. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+Git sync: TypeScript sends `ready`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `commits`, `status`, `graph`, and `theme`. Agents: TypeScript sends session, task, settings and scope commands. C# replies with `control.state`, `control.error` and selection results. All replies use `window.rhinoClient.receive(...)`. `ClientPanel` routes each message by type and answers `ready` for both tabs. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
-
-## UI components
-
-The panel uses React and local shadcn/ui components with Tailwind CSS 3 for compatibility with older Rhino embedded browsers. Button, Badge, and Separator are included; their source lives in `rhino/panel/src/components/ui`. Lucide icons bundle as inline SVG. Theme tokens in `src/styles/panel.css` follow Rhino’s light/dark theme, with the OS preference used in browser preview.
-
-To add another component, run from `rhino/panel`:
-
-```sh
-npx shadcn@latest add input
-```
-
-`components.json` configures the component locations and `@/` import alias. Import components into `src/app.tsx` or other React components. The build compiles Tailwind into the embedded HTML and watches source class changes for live reload. Restart the dev server after changing build or Tailwind configuration.
 
 Build output, dependencies, packages, logs, local environment files, and editor caches are excluded by `.gitignore`. Keep source files, `package-lock.json`, `.env.example` templates, and the shared `.vscode` configuration in Git.
