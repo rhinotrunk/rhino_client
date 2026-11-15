@@ -470,6 +470,9 @@ input.task-search { margin: 2px 10px 10px; width: calc(100% - 20px); height: 28p
 .sessions-blank > svg { color: var(--agent); }
 .sessions-blank p { font-size: 12px; }
 
+.model-select { height: 26px; width: auto; max-width: 100%; padding: 0 22px 0 8px; border-radius: 6px; font-size: 11px; background-color: var(--background); }
+.execution-overview .model-select { width: 100%; }
+.composer-bottom .model-select { max-width: 60%; }
 }
 
 

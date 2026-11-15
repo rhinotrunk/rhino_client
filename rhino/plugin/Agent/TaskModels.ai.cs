@@ -37,6 +37,8 @@ internal sealed class TaskEntry
     public DateTimeOffset? MergedAt { get; set; }
     public string? SessionId { get; set; }
     public string? WorkerThreadId { get; set; }
+    /// <summary>Provider whose thread <see cref="WorkerThreadId"/> belongs to; a thread cannot be resumed by another provider.</summary>
+    public string? WorkerProvider { get; set; }
     public string? Model { get; set; }
     public int Revision { get; set; }
     public string? Error { get; set; }
@@ -62,6 +64,9 @@ internal sealed class SessionEntry
     public bool IsPlanning { get; set; }
     public bool Archived { get; set; }
     public string? PlannerThreadId { get; set; }
+    public string? PlannerProvider { get; set; }
+    /// <summary>Model for this session's planner and its tasks; null follows the default in settings.</summary>
+    public string? Model { get; set; }
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
 }
@@ -71,6 +76,7 @@ internal sealed class ControlState
     public List<TaskEntry> Tasks { get; set; } = [];
     public List<SessionEntry> Sessions { get; set; } = [];
     public string CodexPath { get; set; } = "codex";
+    public string ClaudePath { get; set; } = "claude";
     public const string BudgetModel = "gpt-6-luna";
     public string Model { get; set; } = BudgetModel;
     public int Concurrency { get; set; } = 2;

@@ -4,14 +4,20 @@ const entry = (kind: Activity['kind'], text: string): Activity => ({ kind, text,
 export function createPreview(emit: (e: HostEvent) => void) {
   const state: ControlState = { tasks: [], sessions: [], document: 'Facade study.3dm',
     layers: [{ id: 'grid', name: 'Structure / Grid' }, { id: 'facade', name: 'Envelope / Facade' }],
-    settings: { codexPath: 'codex', model: budgetModel, concurrency: 2 }, storagePath: 'Browser preview only' };
+    settings: { codexPath: 'codex', claudePath: 'claude', model: budgetModel, concurrency: 2 },
+    models: [
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', provider: 'codex', available: true }, { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'codex', available: true },
+      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'codex', available: true },
+      { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', provider: 'claude', available: true }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', provider: 'claude', available: true },
+      { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', provider: 'claude', available: false },
+    ], storagePath: 'Browser preview only' };
   try {
     const saved = localStorage.getItem('rhino-client-preview');
     if (saved) {
       const prior = JSON.parse(saved) as ControlState;
       state.tasks = prior.tasks ?? [];
       state.sessions = prior.sessions ?? [];
-      state.settings = { ...prior.settings, model: ['gpt-6-luna', 'gpt-6.1-terra'].includes(prior.settings?.model) ? prior.settings.model : budgetModel };
+      state.settings = { ...state.settings, ...prior.settings, claudePath: prior.settings?.claudePath ?? 'claude' };
       if (!state.sessions.length && state.tasks.length) {
         const imported = makeSession('Previous modeling session', newId(), { objectIds: [], layerIds: [] });
         state.tasks.forEach(t => { t.sessionId = imported.id; });
@@ -37,7 +43,7 @@ export function createPreview(emit: (e: HostEvent) => void) {
       if (task.status !== 'queued' || task.paused || task.archived || task.deleted || state.sessions.find(s => s.id === task.sessionId)?.archived) continue;
       const parent = state.tasks.find(t => t.id === task.parentId);
       if (task.parentId && !task.inputPath && (parent?.status !== 'ready' || parent.paused || parent.archived || parent.deleted)) continue;
-      available--; task.status = 'running'; task.model = state.settings.model; task.startedAt = new Date().toISOString();
+      available--; task.status = 'running'; task.model = state.sessions.find(s => s.id === task.sessionId)?.model ?? state.settings.model; task.startedAt = new Date().toISOString();
       task.activity.push(entry('status', 'Simulating an external worker. Browser preview makes no model requests or geometry changes.'));
       setTimeout(() => {
         if (task.status !== 'running') return;
@@ -91,9 +97,11 @@ export function createPreview(emit: (e: HostEvent) => void) {
       case 'task.show': state.previewTaskId = task?.resultPath ? task.id : null; publish(); return;
       case 'panel.error': console.error(cmd.message); return;
       case 'scope.selection': emit({ type: 'scope.selection', objectIds: ['preview-object-1', 'preview-object-2'] }); return;
-      case 'settings.save': state.settings = { codexPath: cmd.codexPath, model: cmd.model, concurrency: cmd.concurrency }; break;
+      case 'settings.save': state.settings = { codexPath: cmd.codexPath, claudePath: cmd.claudePath, model: cmd.model, concurrency: cmd.concurrency }; break;
+      case 'session.model': { const target = state.sessions.find(s => s.id === cmd.id); if (target) target.model = cmd.model; publish(); return; }
       case 'session.create': {
         const session = makeSession(cmd.title || cmd.prompt.slice(0, 70), cmd.id, cmd.scope);
+        session.model = cmd.model;
         state.sessions.push(session); plan(session, cmd.prompt); return;
       }
       case 'session.message': {

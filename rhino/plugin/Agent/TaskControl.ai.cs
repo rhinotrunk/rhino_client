@@ -63,11 +63,13 @@ internal sealed class TaskControl : IDisposable
                 }
                 State = saved.Deserialize<ControlState>(AgentJson.Options) ?? new();
             }
-            else State.CodexPath = CodexRunner.FindExecutable();
+            else { State.CodexPath = CodexRunner.FindExecutable(); State.ClaudePath = ClaudeRunner.FindExecutable(); }
         }
         catch (Exception ex) when (ex is JsonException or IOException)
-        { State = new() { CodexPath = CodexRunner.FindExecutable() }; RhinoApp.WriteLine("RhinoClient: could not restore task history: " + ex.Message); }
-        if (State.Model is not ("gpt-6-luna" or "gpt-6.1-terra")) State.Model = ControlState.BudgetModel;
+        { State = new() { CodexPath = CodexRunner.FindExecutable(), ClaudePath = ClaudeRunner.FindExecutable() }; RhinoApp.WriteLine("RhinoClient: could not restore task history: " + ex.Message); }
+        if (!ModelCatalog.IsValid(State.Model)) State.Model = ControlState.BudgetModel;
+        if (string.IsNullOrWhiteSpace(State.ClaudePath)) State.ClaudePath = ClaudeRunner.FindExecutable();
+        foreach (var saved in State.Sessions) if (saved.Model is not null && !ModelCatalog.IsValid(saved.Model)) saved.Model = null;
         foreach (var session in State.Sessions) session.IsPlanning = false;
         foreach (var task in State.Tasks) task.Merging = false;
         foreach (var task in State.Tasks)
@@ -80,7 +82,8 @@ internal sealed class TaskControl : IDisposable
     public object Snapshot() => new
     {
         type = "control.state", tasks = State.Tasks, sessions = State.Sessions, previewTaskId = _previewTaskId,
-        settings = new { codexPath = State.CodexPath, model = State.Model, concurrency = State.Concurrency },
+        settings = new { codexPath = State.CodexPath, claudePath = State.ClaudePath, model = State.Model, concurrency = State.Concurrency },
+        models = ModelCatalog.All(State),
         document = RhinoDoc.FromRuntimeSerialNumber(_sourceSerial)?.Name ?? "Untitled",
         layers = RhinoDoc.FromRuntimeSerialNumber(_sourceSerial)?.Layers.Where(x => !x.IsDeleted).Select(x => new LayerEntry(x.Id, x.FullPath)).ToArray() ?? [],
         storagePath = _directory,
@@ -107,6 +110,47 @@ internal sealed class TaskControl : IDisposable
     {
         var value = Source.Strings.GetValue(RhinoClient.Sync.WorkingCopy.BaseKey);
         return string.IsNullOrEmpty(value) ? null : value;
+    }
+    private static string? ReadModel(JsonElement cmd)
+    {
+        var model = AgentJson.Text(cmd, "model").Trim();
+        if (model.Length == 0) return null;
+        if (!ModelCatalog.IsValid(model)) throw new InvalidOperationException("That is not a valid model id.");
+        return model;
+    }
+    private string ModelOf(string? sessionId) =>
+        (sessionId is null ? null : State.Sessions.FirstOrDefault(x => x.Id == sessionId)?.Model) ?? State.Model;
+    // Runs one turn with whichever CLI serves the model. A thread started by the other provider cannot be resumed.
+    private Task RunAgent(TaskEntry task, string model, string url, string prompt, CancellationToken token)
+    {
+        var provider = ModelCatalog.ProviderOf(model);
+        if (task.WorkerProvider is not null && task.WorkerProvider != provider) task.WorkerThreadId = null;
+        task.WorkerProvider = provider;
+        Func<string, Task> onEvent = line => ParseEvent(task, line);
+        Action<System.Diagnostics.Process> started = p => task.Process = p;
+        return provider == ModelCatalog.Claude
+            ? ClaudeRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token)
+            : CodexRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token);
+    }
+    // What the tasks this one builds on found, oldest first, so a subtask starts from their resolution and not just their geometry.
+    private string UpstreamContext(TaskEntry task)
+    {
+        var chain = new List<TaskEntry>();
+        for (var parent = task.ParentId; parent is not null && chain.Count < 12;)
+        {
+            var upstream = State.Tasks.FirstOrDefault(t => t.Id == parent);
+            if (upstream is null || chain.Contains(upstream)) break;
+            chain.Insert(0, upstream); parent = upstream.ParentId;
+        }
+        if (chain.Count == 0) return "";
+        static string Clip(string text, int limit) { text = text.Trim(); return text.Length <= limit ? text : text[..limit] + "…"; }
+        var lines = chain.Select(upstream =>
+        {
+            var outcome = upstream.Activity.LastOrDefault(a => a.Kind == "assistant")?.Text;
+            var failure = upstream.Status == "failed" ? " It did not finish: " + Clip(upstream.Error ?? "failed", 200) : "";
+            return $"- {upstream.Title} ({upstream.Status}). Asked: {Clip(upstream.Instructions, 400)}\n  Resolution: {(string.IsNullOrWhiteSpace(outcome) ? "no summary was recorded." : Clip(outcome, 1500))}{failure}";
+        });
+        return "\nEarlier tasks this one builds on, oldest first. Their geometry is already in your document copy; use their resolutions for names, dimensions, positions and layers instead of re-deriving or duplicating them:\n" + string.Join("\n", lines) + "\n";
     }
     private static GeometryScope ScopeCopy(GeometryScope scope) => new() { WholeDocument = scope.WholeDocument, ObjectIds = [.. scope.ObjectIds], LayerIds = [.. scope.LayerIds] };
     private GeometryScope ReadScope(JsonElement cmd)
@@ -206,9 +250,8 @@ internal sealed class TaskControl : IDisposable
                 break;
             case "settings.save":
                 State.CodexPath = AgentJson.Text(cmd, "codexPath", "codex");
-                var selectedModel = AgentJson.Text(cmd, "model", ControlState.BudgetModel);
-                if (selectedModel is not ("gpt-6-luna" or "gpt-6.1-terra")) throw new InvalidOperationException("Choose a supported budget model: GPT-6 Luna or GPT-6.1 Terra.");
-                State.Model = selectedModel;
+                State.ClaudePath = AgentJson.Text(cmd, "claudePath", "claude");
+                State.Model = ReadModel(cmd) ?? ControlState.BudgetModel;
                 State.Concurrency = Math.Clamp(cmd.GetProperty("concurrency").GetInt32(), 1, 4);
                 Publish(); Pump(); break;
             case "scope.selection":
@@ -217,11 +260,15 @@ internal sealed class TaskControl : IDisposable
             case "session.create":
                 var initialPrompt = AgentJson.Text(cmd, "prompt").Trim();
                 if (initialPrompt.Length == 0) throw new InvalidOperationException("Describe the work to start a session.");
-                var session = new SessionEntry { Id = AgentJson.Text(cmd, "id", Guid.NewGuid().ToString("N")), Title = AgentJson.Text(cmd, "title", initialPrompt[..Math.Min(70, initialPrompt.Length)]), Scope = ReadScope(cmd) };
+                var session = new SessionEntry { Model = ReadModel(cmd), Id = AgentJson.Text(cmd, "id", Guid.NewGuid().ToString("N")), Title = AgentJson.Text(cmd, "title", initialPrompt[..Math.Min(70, initialPrompt.Length)]), Scope = ReadScope(cmd) };
                 if (State.Sessions.Any(s => s.Id == session.Id)) throw new InvalidOperationException("Session already exists.");
                 State.Sessions.Add(session);
                 StartPlanning(session, initialPrompt);
                 break;
+            case "session.model":
+                // Applies to the planner and to tasks run from now on; finished work keeps the model that made it.
+                Session(id).Model = ReadModel(cmd);
+                Publish(); break;
             case "session.message":
                 var existingSession = Session(id);
                 if (cmd.TryGetProperty("scope", out _)) existingSession.Scope = ReadScope(cmd);
@@ -407,7 +454,7 @@ internal sealed class TaskControl : IDisposable
         if (session.Archived) throw new InvalidOperationException("Restore this session to continue the conversation.");
         if (session.IsPlanning) throw new InvalidOperationException("This session is already preparing tasks.");
         if (string.IsNullOrWhiteSpace(request)) throw new InvalidOperationException("Enter a message first.");
-        var planner = new TaskEntry { Title = "Session planner", SessionId = session.Id, WorkerThreadId = session.PlannerThreadId, Cancellation = new(), Scope = ScopeCopy(session.Scope), Document = Source };
+        var planner = new TaskEntry { Title = "Session planner", SessionId = session.Id, WorkerThreadId = session.PlannerThreadId, WorkerProvider = session.PlannerProvider, Cancellation = new(), Scope = ScopeCopy(session.Scope), Document = Source };
         _planners[session.Id] = planner;
         session.IsPlanning = true;
         Log(planner, "user", request);
@@ -447,7 +494,7 @@ internal sealed class TaskControl : IDisposable
             var existing = State.Tasks.Where(t => t.SessionId == session.Id && !t.Deleted && !t.Archived).Select(t => new { t.Id, t.Title, t.Status, t.ParentId, t.Paused, summary = t.Activity.LastOrDefault(a => a.Kind == "assistant")?.Text });
             var prompt = "You coordinate a Rhino modeling session. Planning is the beginning of this session, not a separate user workflow. Inspect model context before planning. For an initial request, call propose_plan once with the smallest useful set of concrete tasks: a simple request needs only one task. Shared prerequisites are parents. Every requested design option MUST be its own sibling task and its own document copy. Never bundle several options in a task such as Develop-three-versions. A grid plus three facade options requires four tasks: one grid parent and three facade children. Do not execute geometry. For follow-up discussion, answer questions or propose additional tasks only when requested. Existing task IDs may be used as parentKey. Do not duplicate existing tasks. The human must launch reviewed tasks; acceptance is deferred. Available worker operations: polyline/box/sphere creation, move, rotate, scale, copy, delete. No scripts or arbitrary commands.\nExisting tasks: " + JsonSerializer.Serialize(existing, AgentJson.Options) + "\nUser: " + request;
             prompt += $"\nPropose tasks first. Default to calling propose_plan right away on the initial request; do not open with questions. Where the request leaves details open (dimensions, spacing, bay counts), choose sensible, modest values, write them into the task instructions as explicit assumptions, and mention them briefly in your summary so the user can correct them. Ask a question only when you genuinely cannot make a reasonable plan without the answer, and then ask at most one or two short questions in a single message. A count of units or bays is not a spacing in document units; never turn an ambiguous count into thousands of objects. Include explicit dimensions, spacing and estimated object count in geometry task instructions. Each worker turn permits at most {WorkerBudget.MaxToolCalls} tool calls; split larger work only when its scale is explicit.";
-            await CodexRunner.Run(planner, State, _directory, mcp.Url, prompt, line => ParseEvent(planner, line), p => planner.Process = p, planner.Cancellation.Token);
+            await RunAgent(planner, ModelOf(session.Id), mcp.Url, prompt, planner.Cancellation.Token);
         }
         catch (OperationCanceledException) { await RhinoThread.Run(() => { Log(planner, "status", "Session planning stopped."); return true; }); }
         catch (Exception ex)
@@ -459,7 +506,7 @@ internal sealed class TaskControl : IDisposable
         {
             await RhinoThread.Run(() =>
             {
-                session.IsPlanning = false; session.PlannerThreadId = planner.WorkerThreadId;
+                session.IsPlanning = false; session.PlannerThreadId = planner.WorkerThreadId; session.PlannerProvider = planner.WorkerProvider;
                 session.InputTokens += planner.InputTokens; session.OutputTokens += planner.OutputTokens;
                 planner.Process = null; planner.Cancellation?.Dispose(); _planners.Remove(session.Id);
                 Publish(); return true;
@@ -486,8 +533,9 @@ internal sealed class TaskControl : IDisposable
             });
             using var mcp = new TaskMcp(task, false, _ => throw new InvalidOperationException(), (k, t) => Log(task, k, t), () => { WriteCopy(task.Document!, task.WorkingPath!); if (_previewTaskId == task.Id) _preview.Show(task.Document!, false, task.InputPath); }, token);
             var prompt = "You are a Rhino geometry worker. Use only the rhino MCP tools to inspect and edit your assigned document copy. Begin with get_context and list_objects. Scope is enforced by the tools. Never use scripts, shell, external MCP servers, or ActiveDoc. Coordinates use document units. Only polyline/box/sphere creation, transforms and deletion are available. If your request requires unsupported operations or scope expansion, explain that limitation rather than claiming success. Do the requested geometry work, then summarize actual changes and limitations. The shared model is unchanged and PR acceptance is deferred.\nTask: " + task.Title + "\n" + task.Instructions;
+            prompt += UpstreamContext(task);
             prompt += $"\nBefore editing, estimate the number of objects and tool calls. Your turn is limited to {WorkerBudget.MaxToolCalls} tool calls and stops after {WorkerBudget.MaxConsecutiveErrors} consecutive tool errors. If dimensions or counts are ambiguous, or the requested work exceeds the limit, explain and request clarification or a smaller task before creating geometry. Do not repeatedly retry invalid geometry or unsupported operations.";
-            await CodexRunner.Run(task, State, _directory, mcp.Url, prompt, line => ParseEvent(task, line), p => task.Process = p, token);
+            await RunAgent(task, ModelOf(task.SessionId), mcp.Url, prompt, token);
             await RhinoThread.Run(() =>
             {
                 token.ThrowIfCancellationRequested();

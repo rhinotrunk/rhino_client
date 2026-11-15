@@ -63,7 +63,7 @@ internal static class WorkerTests
         Exception? failure = null;
         try
         {
-            await CodexRunner.Run(new(), settings, Path.GetTempPath(), "http://127.0.0.1:1/unused/", failEvent ? "complete" : mode,
+            await CodexRunner.Run(new(), settings, "gpt-6-luna", Path.GetTempPath(), "http://127.0.0.1:1/unused/", failEvent ? "complete" : mode,
                 _ => blockEvent ? new TaskCompletionSource().Task : failEvent ? Task.FromException(new InvalidDataException("Event parsing failed.")) : Task.CompletedTask,
                 process => pid = process.Id, ct, TimeSpan.FromSeconds(1), turnTimeout ?? TimeSpan.FromSeconds(5));
         }

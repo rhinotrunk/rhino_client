@@ -3,11 +3,13 @@ import { X } from "lucide-react";
 import type { Bridge } from "./protocol/bridge";
 import type { Settings } from "./protocol/events";
 import { budgetModel } from "./protocol/events";
+import { ModelSelect } from "./models";
+import type { ModelOption } from "./protocol/events";
 import type { Repo } from "./repo";
 
 // Worker settings belong to the whole panel, so the dialog covers header and tabs alike.
-export function SettingsDialog({ bridge, repo, current, onClose }: { bridge: Bridge; repo: Repo; current: Settings | undefined; onClose: () => void }) {
-  const [settings, setSettings] = useState<Settings>(current ?? { codexPath: "codex", model: budgetModel, concurrency: 2 });
+export function SettingsDialog({ bridge, repo, current, models, onClose }: { bridge: Bridge; repo: Repo; current: Settings | undefined; models: ModelOption[]; onClose: () => void }) {
+  const [settings, setSettings] = useState<Settings>(current ?? { codexPath: "codex", claudePath: "claude", model: budgetModel, concurrency: 2 });
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", escape);
@@ -29,18 +31,18 @@ export function SettingsDialog({ bridge, repo, current, onClose }: { bridge: Bri
           <label className="grid gap-1.5 text-[12px] text-muted-foreground">Codex executable
             <input required className={field} value={settings.codexPath} onChange={(event) => setSettings({ ...settings, codexPath: event.target.value })} />
           </label>
-          <label className="grid gap-1.5 text-[12px] text-muted-foreground">Model
-            <select className={field} value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })}>
-              <option value="gpt-6-luna">GPT-6 Luna — budget default</option>
-              <option value="gpt-6.1-terra">GPT-6.1 Terra — lower-cost 6.1</option>
-            </select>
+          <label className="grid gap-1.5 text-[12px] text-muted-foreground">Default model for new sessions
+            <ModelSelect value={settings.model} models={models} onChange={(model) => setSettings({ ...settings, model })} className={field} />
+          </label>
+          <label className="grid gap-1.5 text-[12px] text-muted-foreground">Claude Code executable
+            <input className={field} value={settings.claudePath} onChange={(event) => setSettings({ ...settings, claudePath: event.target.value })} />
           </label>
           <label className="grid gap-1.5 text-[12px] text-muted-foreground">Concurrent task workers
             <select className={field} value={settings.concurrency} onChange={(event) => setSettings({ ...settings, concurrency: Number(event.target.value) })}>
               {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">Uses your existing Codex CLI sign-in. Low reasoning effort; no automatic upgrade to a pricier model.</p>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">OpenAI models use your Codex CLI sign-in and Claude models your Claude Code sign-in; no keys are entered here. Each session can pick its own model.</p>
           <footer className="flex justify-end">
             <button type="submit" className="h-8 rounded-md bg-primary px-4 text-[13px] font-medium text-primary-foreground hover:bg-primary/90">Save</button>
           </footer>

@@ -4,6 +4,9 @@
     <Compile Include="../../rhino/plugin/Agent/TaskModels.ai.cs" Link="TaskModels.ai.cs" />
     <Compile Include="../../rhino/plugin/Agent/WorkerBudget.ai.cs" Link="WorkerBudget.ai.cs" />
     <Compile Include="../../rhino/plugin/Agent/CodexRunner.ai.cs" Link="CodexRunner.ai.cs" />
+    <Compile Include="../../rhino/plugin/Agent/ClaudeRunner.ai.cs" Link="ClaudeRunner.ai.cs" />
+    <Compile Include="../../rhino/plugin/Agent/ProcessLauncher.ai.cs" Link="ProcessLauncher.ai.cs" />
+    <Compile Include="../../rhino/plugin/Agent/ModelCatalog.ai.cs" Link="ModelCatalog.ai.cs" />
     <Compile Include="../../rhino/plugin/UI/PanelBridge.ai.cs" Link="PanelBridge.ai.cs" />
     <Compile Include="../../rhino/plugin/Sync/TaskMerge.ai.cs" Link="TaskMerge.ai.cs" />
   </ItemGroup>

@@ -65,7 +65,7 @@ function Shell() {
       <div role="tabpanel" id="pane-graph" aria-labelledby="tab-graph" hidden={tab !== 'graph'} className="absolute inset-0"><History repo={repo} focus={focus} /></div>
       <div role="tabpanel" id="pane-agents" aria-labelledby="tab-agents" hidden={tab !== 'agents'} className="agents absolute inset-0"><PanelErrorBoundary><App bridge={bridge} /></PanelErrorBoundary></div>
     </div>
-    {settingsOpen && <SettingsDialog bridge={bridge} repo={repo} current={repo.control?.settings} onClose={() => setSettingsOpen(false)} />}
+    {settingsOpen && <SettingsDialog bridge={bridge} repo={repo} current={repo.control?.settings} models={repo.control?.models ?? []} onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 createRoot(root).render(<Shell />);

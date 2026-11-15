@@ -13,20 +13,22 @@ export type AgentTask = {
   baseCommit?: string | null; merging?: boolean; mergedBranch?: string | null; mergedAt?: string | null;
   opening?: boolean; prBranch?: string | null; prBase?: string | null; prOpenedAt?: string | null;
 };
-export type Settings = { codexPath: string; model: string; concurrency: number };
+export type Settings = { codexPath: string; claudePath: string; model: string; concurrency: number };
+export type ModelOption = { id: string; label: string; provider: 'codex' | 'claude'; available: boolean };
 export type ModelingSession = {
   id: string; title: string; createdAt: string; scope: Scope; conversation: Activity[];
-  archived?: boolean; isPlanning: boolean; inputTokens: number; outputTokens: number;
+  archived?: boolean; isPlanning: boolean; inputTokens: number; outputTokens: number; model?: string | null;
 };
 export type ControlState = {
-  previewTaskId?: string | null; tasks: AgentTask[]; sessions: ModelingSession[]; settings: Settings;
+  previewTaskId?: string | null; tasks: AgentTask[]; sessions: ModelingSession[]; settings: Settings; models: ModelOption[];
   document: string; layers: { id: string; name: string }[]; storagePath: string;
 };
 export type PanelCommand =
   | { type: 'ready' | 'scope.selection' | 'preview.clear' }
   | { type: 'panel.error'; message: string }
   | { type: 'settings.save' } & Settings
-  | { type: 'session.create'; id: string; title?: string; prompt: string; scope: Scope }
+  | { type: 'session.create'; id: string; title?: string; prompt: string; scope: Scope; model?: string }
+  | { type: 'session.model'; id: string; model: string }
   | { type: 'session.message'; id: string; prompt: string; scope?: Scope }
   | { type: 'session.stop' | 'session.archive' | 'session.restore'; id: string }
   | { type: 'tasks.launch'; sessionId: string }
