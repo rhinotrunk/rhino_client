@@ -1,3 +1,4 @@
+import { previewHistory } from '../graph/fixture';
 import type { HostEvent, PanelCommand } from './events';
 
 declare const __PREVIEW__: boolean;
@@ -29,7 +30,6 @@ export function createBridge(): Bridge {
   // Eto's shim is ready at document start on macOS. WebView2 exists earlier
   // than the shim on Windows; Eto receives its messages on the same channel.
   const transport = window.eto ?? window.chrome?.webview;
-  let clicks = 0;
   return {
     kind: transport ? 'native' : __PREVIEW__ ? 'preview' : 'unavailable',
     subscribe(listener) {
@@ -39,14 +39,48 @@ export function createBridge(): Bridge {
     send(command) {
       if (transport) {
         transport.postMessage(JSON.stringify(command));
-      } else if (__PREVIEW__) {
-        if (command.type === 'button.click') clicks++;
-        queueMicrotask(() => receive({
-          type: 'state',
-          clicks,
-          message: clicks === 0 ? 'Browser preview' : `Preview received click ${clicks}`,
-        }));
+        return;
       }
+      if (!__PREVIEW__) return;
+      queueMicrotask(() => {
+        if (command.type === 'ready') {
+          const scheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          receive({ type: 'theme', scheme });
+          receive({ type: 'session', server: 'http://localhost:5280/', repo: 'demo', branch: 'main' });
+          receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
+          return;
+        }
+        if (command.type === 'graph') {
+          receive({
+            type: 'graph',
+            repo: command.repo,
+            truncated: false,
+            error: false,
+            message: '',
+            commits: previewHistory(),
+          });
+          return;
+        }
+        if (command.type === 'commits') {
+          receive({
+            type: 'commits',
+            error: false,
+            message: '',
+            commits: [
+              { id: 'sha256:' + 'a'.repeat(64), message: 'Update geometry' },
+              { id: 'sha256:' + 'b'.repeat(64), message: 'Initial commit' },
+            ],
+          });
+          return;
+        }
+        const verb = command.type === 'pull' ? 'Pull' : 'Push';
+        receive({
+          type: 'status',
+          message: `Preview ${verb.toLowerCase()} ${command.repo} ${command.branch}`,
+          error: false,
+          busy: false,
+        });
+      });
     },
   };
 }
