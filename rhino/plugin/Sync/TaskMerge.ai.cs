@@ -6,7 +6,14 @@ namespace RhinoClient.Sync;
 /// A finished agent task whose result copy should be merged into the model's branch.
 /// <paramref name="BaseCommit"/> is the commit the task's snapshot was taken at.
 /// </summary>
-public sealed record TaskMergeRequest(string TaskId, string Title, int Revision, string ResultPath, string BaseCommit);
+public sealed record TaskMergeRequest(string TaskId, string Title, int Revision, string ResultPath, string BaseCommit)
+{
+    /// <summary>Which side wins when both changed the same object: "ours" (the model's branch) or "theirs" (the task). Null asks first.</summary>
+    public string? Resolve { get; init; }
+
+    /// <summary>Branch the pull request merges into; null means the branch the model is on.</summary>
+    public string? Into { get; init; }
+}
 
 public static class TaskBranch
 {

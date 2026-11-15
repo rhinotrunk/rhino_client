@@ -97,7 +97,10 @@ public sealed class ClientPanel : Panel
                         Text(command, "message"));
                     break;
                 case "task.merge":
-                    MergeTask(Text(command, "id"));
+                    MergeTask(Text(command, "id"), Text(command, "resolve"));
+                    break;
+                case "branch.merge":
+                    MergeBranch(Text(command, "theirs"), Text(command, "into"), Text(command, "resolve"));
                     break;
                 case "task.pr.open":
                     OpenPullRequest(Text(command, "id"));
@@ -139,19 +142,21 @@ public sealed class ClientPanel : Panel
         RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
 
     // One-click merge of a finished agent task: same sync pipeline as Push and Pull, so it shares their busy state.
-    private async void MergeTask(string id)
+    private async void MergeTask(string id, string resolve)
     {
-        if (!_control.TryBeginMerge(id, out var request, out var problem))
+        if (!_control.TryBeginMerge(id, resolve is "ours" or "theirs" ? resolve : null, out var request, out var problem))
         {
             _bridge.Post(new { type = "control.error", message = problem });
             return;
         }
 
         var branch = TaskBranch.Name(request);
+        var into = "";
         SyncResult result;
         try
         {
             var target = _sync.ReadTarget();
+            into = target.Branch;
             result = await RunAsync($"Merging {request.Title}…", token => _sync.MergeTaskAsync(target, request, token));
         }
         catch (Exception ex)
@@ -164,7 +169,9 @@ public sealed class ClientPanel : Panel
             try
             {
                 _control.FinishMerge(id, result.Ok, result.Message, branch);
-                if (!result.Ok) _bridge.Post(new { type = "control.error", message = result.Message });
+                if (result.Conflicts > 0)
+                    _bridge.Post(new { type = "merge.conflict", id, title = request.Title, branch, into = request.Into ?? into, conflicts = result.Conflicts });
+                else if (!result.Ok) _bridge.Post(new { type = "control.error", message = result.Message });
             }
             catch (Exception ex)
             {
@@ -172,6 +179,25 @@ public sealed class ClientPanel : Panel
                 RhinoApp.WriteLine("RhinoClient: could not record the merge result (" + ex.Message + ").");
             }
         });
+    }
+
+    // Merges any branch into another from the graph. A conflict is not an error: the panel asks which side wins.
+    private async void MergeBranch(string theirs, string into, string resolve)
+    {
+        SyncResult result;
+        try
+        {
+            var target = _sync.ReadTarget();
+            var take = resolve is "ours" or "theirs" ? resolve : null;
+            result = await RunAsync($"Merging {theirs} into {into}…", token => _sync.MergeBranchAsync(target, theirs, into, take, token));
+        }
+        catch (Exception ex)
+        {
+            result = SyncResult.Fail(ex.Message);
+        }
+
+        if (result.Conflicts > 0)
+            Post(new { type = "merge.conflict", id = "", title = theirs, branch = theirs, into, conflicts = result.Conflicts });
     }
 
     // Opens a pull request for a finished task: its result goes onto its own agent branch and waits for review.

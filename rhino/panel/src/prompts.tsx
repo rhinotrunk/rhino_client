@@ -5,13 +5,27 @@ import type { Repo } from "./repo";
 
 // Questions the host asks before it changes the model. They sit under the header so they are never missed.
 export function Prompts({ repo }: { repo: Repo }) {
-  const { unpushed, detached } = repo;
-  if (!unpushed && !detached) return null;
+  const { unpushed, detached, conflict } = repo;
+  if (!unpushed && !detached && !conflict) return null;
   const branch = repo.branch.trim() || "the branch";
   const button = "h-8 rounded-md px-3 text-[12px] font-medium disabled:opacity-40";
   return (
     <div role="alertdialog" aria-live="assertive" className="shrink-0 border-b bg-card px-3 py-2.5">
-      {unpushed ? (
+      {conflict ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <p className="flex min-w-0 flex-1 basis-64 items-start gap-2 text-[13px]">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-modified" />
+            <span>
+              Merging <b className="font-medium">{conflict.title}</b> into <b className="font-medium">{conflict.into}</b> conflicts on {conflict.conflicts === 1 ? "1 object" : `${conflict.conflicts} objects`}: both sides changed the same fields. Which version should win?
+            </span>
+          </p>
+          <div className="flex gap-1.5">
+            <button type="button" disabled={!repo.idle} onClick={() => repo.resolveMerge("ours")} className={cn(button, "border hover:bg-accent")} title={`Keep what ${conflict.into} has`}>Keep {conflict.into}</button>
+            <button type="button" disabled={!repo.idle} onClick={() => repo.resolveMerge("theirs")} className={cn(button, conflict.id ? "bg-[var(--agent)] text-white hover:brightness-110" : "bg-primary text-primary-foreground hover:bg-primary/90")} title={conflict.id ? "Take the agent's version" : `Take what ${conflict.branch} has`}>{conflict.id ? "Use agent's" : `Use ${conflict.branch}`}</button>
+            <button type="button" onClick={repo.cancelMerge} className={cn(button, "hover:bg-accent")}>Cancel</button>
+          </div>
+        </div>
+      ) : unpushed ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <p className="flex min-w-0 flex-1 basis-64 items-start gap-2 text-[13px]">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-modified" />

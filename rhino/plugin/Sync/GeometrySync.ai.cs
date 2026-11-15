@@ -20,12 +20,16 @@ public sealed record SyncResult(bool Ok, string Message)
     /// </summary>
     public string? Detached { get; init; }
 
+    /// <summary>Objects both sides of a merge changed incompatibly. The caller asks which side to keep.</summary>
+    public int Conflicts { get; init; }
+
     /// <summary>Stopped to ask the user something rather than failed.</summary>
-    public bool Asking => Unpushed > 0 || Detached is not null;
+    public bool Asking => Unpushed > 0 || Detached is not null || Conflicts > 0;
 
     public static SyncResult Success(string message) => new(true, message);
     public static SyncResult Fail(string message) => new(false, message);
     public static SyncResult Stopped(int unpushed, string message) => new(false, message) { Unpushed = unpushed };
+    public static SyncResult Conflicted(int conflicts, string message) => new(false, message) { Conflicts = conflicts };
     public static SyncResult OffTip(string commit, string message) => new(false, message) { Detached = commit };
 }
 
@@ -88,6 +92,10 @@ public sealed class GeometrySync : IDisposable
     /// </summary>
     public Task<SyncResult> MergeTaskAsync(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken = default) =>
         Run(() => MergeTaskCore(target, task, cancellationToken), cancellationToken);
+
+    /// <summary>Merges one branch into another. When that is the branch the model is on, the merged result is pulled into the model.</summary>
+    public Task<SyncResult> MergeBranchAsync(SyncTarget target, string theirs, string into, string? resolve, CancellationToken cancellationToken = default) =>
+        Run(() => MergeBranchCore(target, theirs, into, resolve, cancellationToken), cancellationToken);
 
     /// <summary>
     /// Opens a pull request for a finished agent task: commits the result to its own agent branch, based on the
@@ -291,6 +299,79 @@ public sealed class GeometrySync : IDisposable
         return SyncResult.Success($"Opened a pull request: {branch} into {bound.Branch}{published.ChangeNote}.");
     }
 
+    private async Task<SyncResult> MergeBranchCore(SyncTarget target, string theirs, string into, string? resolve, CancellationToken cancellationToken)
+    {
+        var bound = Normalize(target);
+        theirs = theirs.Trim();
+        into = into.Trim();
+        if (theirs.Length == 0 || into.Length == 0 || string.Equals(theirs, into, StringComparison.Ordinal))
+            return SyncResult.Fail("Choose two different branches to merge.");
+        OnUi(() =>
+        {
+            _copy.Read();
+            _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
+        });
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        var remote = await client.GetBranchAsync(bound.Repo, into, cancellationToken).ConfigureAwait(false)
+            ?? throw new SyncException($"Branch '{into}' does not exist.");
+        if (await client.GetBranchAsync(bound.Repo, theirs, cancellationToken).ConfigureAwait(false) is null)
+            throw new SyncException($"Branch '{theirs}' does not exist.");
+
+        var intoModel = string.Equals(into, bound.Branch, StringComparison.Ordinal);
+        if (intoModel)
+        {
+            // Pulling the merged result replaces model content, so never run it over unpushed edits.
+            if (_copy.BaseCommit is null)
+                return SyncResult.Fail($"This model is not on '{into}' yet. Pull or push it first.");
+            await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+            if (_copy.HasUnsupported)
+                return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
+            var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
+            if (local.Changes.Count > 0)
+                return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
+        }
+
+        var request = new MergeRequest { Branch = into, ExpectedHead = remote.Commit, Theirs = theirs, Message = $"Merge branch '{theirs}' into {into}", Author = Author() };
+        MergeResponse merged;
+        try
+        {
+            merged = await client.MergeAsync(bound.Repo, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RhinoTrunkApiException ex) when (ex.Error.Code == "merge_conflict")
+        {
+            var conflicts = (ex.Error.Errors ?? []).Where(detail => !string.IsNullOrEmpty(detail.Id)).ToList();
+            if (resolve is null)
+                return SyncResult.Conflicted(Math.Max(conflicts.Count, 1),
+                    $"Merging '{theirs}' into '{into}' conflicts on {Math.Max(conflicts.Count, 1)} object(s): both sides changed the same fields. Choose which version to keep.");
+            var take = resolve == "theirs" ? MergeTakes.Theirs : MergeTakes.Ours;
+            try
+            {
+                merged = await client.MergeAsync(bound.Repo, request with
+                {
+                    Resolutions = conflicts.Select(detail => new MergeResolution { Doc = detail.Doc ?? Names.DefaultDoc, Kind = detail.Kind ?? "object", Id = detail.Id!, Take = take }).ToList(),
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RhinoTrunkApiException retry)
+            {
+                return SyncResult.Fail($"Could not merge '{theirs}' into '{into}'. {Format(retry)}");
+            }
+        }
+        catch (RhinoTrunkApiException ex)
+        {
+            return SyncResult.Fail($"Could not merge '{theirs}' into '{into}'. {Format(ex)}");
+        }
+
+        if (string.Equals(merged.Status, "upToDate", StringComparison.OrdinalIgnoreCase))
+            return SyncResult.Success($"'{into}' already contains '{theirs}'. Nothing to merge.");
+        if (!intoModel)
+            return SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). The model stays on {bound.Branch}.");
+        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
+        return pulled.Ok
+            ? SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). {pulled.Message}")
+            : SyncResult.Fail($"Merged '{theirs}' into {into} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+    }
+
     private async Task<SyncResult> MergeTaskCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
     {
         var bound = Normalize(target);
@@ -306,15 +387,18 @@ public sealed class GeometrySync : IDisposable
 
         var client = ClientFor(bound.Server);
         await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
-        var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false)
-            ?? throw new SyncException($"Branch '{bound.Branch}' does not exist.");
+        // A pull request can target any branch. The model is only updated when it targets the branch the model is on.
+        var into = string.IsNullOrWhiteSpace(task.Into) ? bound.Branch : task.Into.Trim();
+        var intoModel = string.Equals(into, bound.Branch, StringComparison.Ordinal);
+        var remote = await client.GetBranchAsync(bound.Repo, into, cancellationToken).ConfigureAwait(false)
+            ?? throw new SyncException($"Branch '{into}' does not exist.");
         await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
         if (_copy.HasUnsupported)
             return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
 
         // Pulling the merged result replaces model content, so never run it over unpushed edits.
-        var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
-        if (local.Changes.Count > 0)
+        var local = intoModel ? OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy)) : null;
+        if (local is not null && local.Changes.Count > 0)
             return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
 
         var branch = TaskBranch.Name(task);
@@ -323,25 +407,48 @@ public sealed class GeometrySync : IDisposable
         var changeNote = published.ChangeNote;
 
         MergeResponse merged;
+        var request = new MergeRequest
+        {
+            Branch = into,
+            ExpectedHead = remote.Commit,
+            Theirs = branch,
+            Message = "Merge agent task: " + task.Title,
+            Author = Author(),
+            // Always record a merge commit, even when the branch could fast-forward, so history shows the
+            // task splitting off the branch as one commit and joining back in.
+            NoFastForward = true,
+        };
         try
         {
-            merged = await client.MergeAsync(bound.Repo, new MergeRequest
+            merged = await client.MergeAsync(bound.Repo, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RhinoTrunkApiException ex) when (ex.Error.Code == "merge_conflict")
+        {
+            var conflicts = (ex.Error.Errors ?? []).Where(detail => !string.IsNullOrEmpty(detail.Id)).ToList();
+            if (task.Resolve is null)
+                return SyncResult.Conflicted(Math.Max(conflicts.Count, 1),
+                    $"Merging '{task.Title}' into '{into}' conflicts on {Math.Max(conflicts.Count, 1)} object(s): both sides changed the same fields. Choose which version to keep. The task branch is kept.");
+            // One choice for every conflicting object: keep the model branch's version (ours) or the task's (theirs).
+            var take = task.Resolve == "theirs" ? MergeTakes.Theirs : MergeTakes.Ours;
+            try
             {
-                Branch = bound.Branch,
-                ExpectedHead = remote.Commit,
-                Theirs = branch,
-                Message = "Merge agent task: " + task.Title,
-                Author = Author(),
-                // Always record a merge commit, even when the branch could fast-forward, so history shows the
-                // task splitting off the branch as one commit and joining back in.
-                NoFastForward = true,
-            }, cancellationToken).ConfigureAwait(false);
+                merged = await client.MergeAsync(bound.Repo, request with
+                {
+                    Resolutions = conflicts.Select(detail => new MergeResolution { Doc = detail.Doc ?? Names.DefaultDoc, Kind = detail.Kind ?? "object", Id = detail.Id!, Take = take }).ToList(),
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RhinoTrunkApiException retry)
+            {
+                return SyncResult.Fail($"Branch '{branch}' holds the task's result but could not be merged into '{into}'. {Format(retry)} The branch is kept for review.");
+            }
         }
         catch (RhinoTrunkApiException ex)
         {
-            return SyncResult.Fail($"Branch '{branch}' holds the task's result but could not be merged into '{bound.Branch}'. {Format(ex)} The branch is kept for review.");
+            return SyncResult.Fail($"Branch '{branch}' holds the task's result but could not be merged into '{into}'. {Format(ex)} The branch is kept for review.");
         }
 
+        if (!intoModel)
+            return SyncResult.Success($"Merged '{task.Title}'{changeNote} into {into} via {branch} ({merged.Commit}). The model stays on {bound.Branch}.");
         // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
         var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
         return pulled.Ok

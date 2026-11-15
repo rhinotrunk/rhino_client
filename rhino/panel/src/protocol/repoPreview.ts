@@ -53,6 +53,9 @@ export function repoPreview(command: PanelCommand, receive: (event: HostEvent) =
         receive({ type: 'head', repo: command.repo, ...head });
       });
       return true;
+    case 'branch.merge':
+      queueMicrotask(() => receive({ type: 'status', message: `Preview: merged ${command.theirs} into ${command.into}`, error: false, busy: false }));
+      return true;
     case 'pull':
       queueMicrotask(() => {
         head = { branch: command.branch, commit: tipOf(command.branch) };

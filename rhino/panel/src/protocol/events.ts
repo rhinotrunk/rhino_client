@@ -37,6 +37,10 @@ export type PanelCommand =
   | { type: 'task.add'; sessionId: string; id?: string; launch?: boolean; branchFromResult?: boolean; title: string; instructions: string; parentId?: string; scope: Scope }
   | { type: 'task.update'; id: string; title: string; instructions: string; scope: Scope }
   | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show' | 'task.merge' | 'task.pr.open' | 'task.pr.close'; id: string }
+  // Retry a merge that conflicted: keep the model branch's version (ours) or the agent's (theirs) of every conflicting object.
+  | { type: 'task.merge'; id: string; resolve: 'ours' | 'theirs' }
+  | { type: 'task.pr.base'; id: string; branch: string }
+  | { type: 'branch.merge'; theirs: string; into: string; resolve?: 'ours' | 'theirs' }
   | { type: 'task.message'; id: string; message: string }
   | { type: 'repos'; server: string }
   | { type: 'branches'; server: string; repo: string }
@@ -53,6 +57,7 @@ export type HostEvent =
   | { type: 'branches'; server: string; repo: string; branches: string[]; message: string; error: boolean }
   | { type: 'graph'; repo: string; head?: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
   | { type: 'status'; message: string; error: boolean; busy: boolean }
+  | { type: 'merge.conflict'; id: string; title: string; branch: string; into: string; conflicts: number }
   | { type: 'checkout.unpushed'; commit: string; changes: number }
   // A push stopped because the model's base commit is not the branch tip. The panel offers another branch.
   | { type: 'push.detached'; commit: string }

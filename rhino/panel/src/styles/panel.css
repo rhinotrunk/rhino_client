@@ -478,6 +478,14 @@ input.task-search { margin: 2px 10px 10px; width: calc(100% - 20px); height: 28p
 .stop-button svg { fill: currentColor; }
 .stop-button:hover:not(:disabled) { background: var(--bad); color: var(--card); border-color: var(--bad); }
 .task-actions { flex-wrap: nowrap; flex-shrink: 0; }
+.status-merged { color: var(--good); }
+.merged-chip { margin: 0 4px; }
+
 }
 
 
+
+/* Merge target: a quiet select that reads as part of the pull request badge. */
+.target-picker { width: auto; height: 22px; max-width: 14ch; line-height: 22px; border: 0; border-radius: 5px; background-color: color-mix(in srgb, currentColor 14%, transparent); color: inherit; padding: 0 20px 0 6px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.target-picker:focus-visible { outline: 2px solid var(--ring); }
+.target-picker option { color: var(--foreground); background: var(--card); }

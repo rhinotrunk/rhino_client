@@ -82,7 +82,7 @@ export function Header({
           <Action label="Refresh history" icon={<RefreshCw size={16} className={cn(repo.busy && "animate-spin")} />} disabled={disabled} onClick={repo.refresh} />
           <span className="mx-1 h-4 w-px bg-border" />
           <Action
-            label={prs.length ? `${prs.length} open pull request${prs.length === 1 ? "" : "s"}` : "No open pull requests"}
+            label={prs.length ? `${prs.length} open pull request${prs.length === 1 ? "" : "s"}` : "No open pull requests. Merge a branch by hovering it in the graph."}
             icon={<GitPullRequest size={17} />}
             disabled={prs.length === 0}
             onClick={onPrs}

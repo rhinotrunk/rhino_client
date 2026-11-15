@@ -83,6 +83,9 @@ export function createPreview(emit: (e: HostEvent) => void) {
           task.activity.push(entry('status', 'Preview: opened a pull request, agent/facade-a into main.'));
         }
         publish(); return;
+      case 'task.pr.base':
+        if (task?.prBranch) task.prBase = cmd.branch;
+        publish(); return;
       case 'task.pr.close':
         if (task?.prBranch) { task.prBranch = null; task.prBase = null; task.prOpenedAt = null; }
         publish(); return;

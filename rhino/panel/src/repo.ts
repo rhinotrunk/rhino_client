@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bridge } from "./protocol/bridge";
-import type { AgentTask, ControlState, GraphCommit, UnpushedChoice } from "./protocol/events";
+import type { AgentTask, ControlState, GraphCommit, PanelCommand, UnpushedChoice } from "./protocol/events";
 
 export type History = {
   repo: string;
@@ -37,6 +37,7 @@ export function useRepo(bridge: Bridge) {
   const [unpushed, setUnpushed] = useState<{ commit: string; changes: number; branch?: string } | null>(null);
   const [detached, setDetached] = useState<{ commit: string } | null>(null);
   const [newBranch, setNewBranch] = useState("");
+  const [conflict, setConflict] = useState<{ id: string; title: string; branch: string; into: string; conflicts: number } | null>(null);
   const branchRef = useRef("main");
   const checkoutTarget = useRef<string | undefined>(undefined);
   const [repos, setRepos] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
@@ -80,6 +81,8 @@ export function useRepo(bridge: Bridge) {
         });
       } else if (event.type === "checkout.unpushed") {
         setUnpushed({ commit: event.commit, changes: event.changes, branch: checkoutTarget.current });
+      } else if (event.type === "merge.conflict") {
+        setConflict({ id: event.id, title: event.title, branch: event.branch, into: event.into, conflicts: event.conflicts });
       } else if (event.type === "push.detached") {
         setDetached({ commit: event.commit });
         setNewBranch(`${branchRef.current.trim() || "branch"}-${event.commit.replace(/^sha256:/, "").slice(0, 7)}`);
@@ -181,7 +184,7 @@ export function useRepo(bridge: Bridge) {
     bridge.send({ type: "checkout", ...spec, branch: target, commit, message: message.trim(), unpushed: choice });
   };
   return {
-    bridge, server, repo, branch, message, unpushed, detached, newBranch, setNewBranch, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
+    bridge, server, repo, branch, message, unpushed, detached, conflict, newBranch, setNewBranch, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
     idle,
     setServer, setRepo, setBranch, setMessage, remember, requestRepos, requestBranches, chooseRepo,
     pull() {
@@ -232,7 +235,28 @@ export function useRepo(bridge: Bridge) {
       bridge.send({ type: "task.pr.close", id });
     },
     mergePr(id: string) {
-      bridge.send({ type: "task.merge", id });
+      setConflict(null);
+      bridge.send({ type: "task.merge", id } as PanelCommand);
+    },
+    retargetPr(id: string, target: string) {
+      bridge.send({ type: "task.pr.base", id, branch: target });
+    },
+    // Merge any branch into another. The host asks which side wins when objects conflict.
+    mergeBranch(theirs: string, into: string) {
+      if (!idle) return;
+      setConflict(null);
+      begin(`Merging ${theirs} into ${into}…`);
+      bridge.send({ type: "branch.merge", theirs, into });
+    },
+    resolveMerge(resolve: "ours" | "theirs") {
+      if (!conflict) return;
+      const { id, branch: theirs, into } = conflict;
+      setConflict(null);
+      if (id) bridge.send({ type: "task.merge", id, resolve });
+      else bridge.send({ type: "branch.merge", theirs, into, resolve });
+    },
+    cancelMerge() {
+      setConflict(null);
     },
   };
 }

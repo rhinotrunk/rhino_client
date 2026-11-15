@@ -4,6 +4,7 @@ import type { Bridge } from './protocol/bridge';
 import type { Activity, AgentTask, ControlState, Scope, Settings, TaskStatus, ModelingSession } from './protocol/events';
 import { newId } from './protocol/events';
 import { ModelSelect, modelLabel } from './models';
+import { TargetPicker } from './target';
 
 const labels: Record<TaskStatus, string> = { draft: 'Not launched', queued: 'Queued for worker', running: 'Running', stopping: 'Stopping', stopped: 'Stopped', ready: 'Ready for review', failed: 'Failed', interrupted: 'Interrupted' };
 const emptyScope = (): Scope => ({ objectIds: [], layerIds: [] });
@@ -21,7 +22,7 @@ function ActivityList({ entries, activity }: { entries: Activity[]; activity: bo
     </div>)}<div ref={end} />
   </div>;
 }
-export function App({ bridge }: { bridge: Bridge }) {
+export function App({ bridge, branches }: { bridge: Bridge; branches: string[] }) {
   const [state, setState] = useState<ControlState>();
   const [selected, setSelected] = useState('sessions');
   const [tab, setTab] = useState<'conversation' | 'activity' | 'scope'>('conversation');
@@ -85,7 +86,8 @@ export function App({ bridge }: { bridge: Bridge }) {
   const waitingLabel = (node: AgentTask): string => {
     if (node.archived) return 'Archived';
     if (node.paused) return node.status === 'stopping' ? 'Pausing…' : 'Paused';
-    if (node.status === 'ready' && node.prBranch && !node.mergedBranch) return 'PR open';
+    if (node.status === 'ready' && node.mergedBranch) return 'Merged';
+    if (node.status === 'ready' && node.prBranch) return 'PR open';
     if (node.status !== 'queued' || node.inputPath) return labels[node.status];
     const parent = state.tasks.find(t => t.id === node.parentId);
     if (!parent || parent.status === 'ready') return labels.queued;
@@ -97,7 +99,7 @@ export function App({ bridge }: { bridge: Bridge }) {
     {node.archived ? <button className="icon-button" aria-label={`Restore ${node.title}`} title="Restore task and children" onClick={() => send({ type: 'task.restore', id: node.id })}><Archive size={13} /></button> : <>
     {node.paused || ['stopped', 'interrupted', 'failed'].includes(node.status) ? <button className="icon-button" aria-label={`Resume ${node.title}`} title="Resume task" onClick={() => send({ type: 'task.resume', id: node.id })}><Play size={13} /></button> : node.status === 'draft' ? <button className="icon-button" aria-label={`Run ${node.title}`} title="Run task" onClick={() => send({ type: 'task.launch', id: node.id })}><Play size={13} /></button> : null}
     {node.status === 'ready' && (node.mergedBranch
-      ? <span className="merged-chip" title={`Merged via ${node.mergedBranch}`}><Check size={12} aria-hidden="true" />Merged</span>
+      ? <span className="merged-chip" title={`Merged via ${node.mergedBranch}`}><Check size={16} aria-hidden="true" /></span>
       : node.prBranch
         ? <><button className="merge-button" disabled={node.merging} aria-label={`Merge ${node.title}`} title={node.merging ? 'Merging…' : `Merge ${node.prBranch} into ${node.prBase ?? 'the model branch'} and pull it into the model`} onClick={() => send({ type: 'task.merge', id: node.id })}>{node.merging ? <Loader2 size={18} className="spin" aria-hidden="true" /> : <GitMerge size={18} aria-hidden="true" />}</button>
           <button className="icon-button" disabled={node.merging} aria-label={`Close pull request for ${node.title}`} title="Close pull request without merging" onClick={() => send({ type: 'task.pr.close', id: node.id })}><X size={17} /></button></>
@@ -165,7 +167,7 @@ export function App({ bridge }: { bridge: Bridge }) {
             {!task && session.isPlanning && <div className="notice"><Loader2 size={13} className="spin" /> Orchestrator is preparing tasks and dependencies…</div>}
             {task?.status === 'queued' && <div className="notice">{upstream && upstream.status !== 'ready' ? waitingLabel(task) : 'Waiting for an available worker.'}</div>}
             {task?.status === 'ready' && <div className="proposal-strip"><div>{task.mergedBranch ? <Check size={16} /> : <GitPullRequest size={16} />}{task.mergedBranch ? 'Merged' : task.prBranch ? 'Pull request open' : 'Ready for review'} <span className="muted">/ revision {task.revision}</span></div>
-              {!task.mergedBranch && (task.prBranch ? <><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.merge', id: task.id })}><GitMerge size={13} />Merge</button><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.pr.close', id: task.id })}>Close PR</button></> : <button className="quiet" disabled={task.opening} onClick={() => send({ type: 'task.pr.open', id: task.id })}><GitPullRequest size={13} />Open PR</button>)}
+              {!task.mergedBranch && (task.prBranch ? <><TargetPicker value={task.prBase ?? 'main'} options={branches} onChange={branch => send({ type: 'task.pr.base', id: task.id, branch })} disabled={task.merging} /><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.merge', id: task.id })}><GitMerge size={13} />Merge</button><button className="quiet" disabled={task.merging} onClick={() => send({ type: 'task.pr.close', id: task.id })}>Close PR</button></> : <button className="quiet" disabled={task.opening} onClick={() => send({ type: 'task.pr.open', id: task.id })}><GitPullRequest size={13} />Open PR</button>)}
               <button className="quiet" onClick={() => send({ type: 'task.show', id: task.id })}>Show in viewport</button>{task.prBranch && !task.mergedBranch && <p>{task.prBranch} → {task.prBase ?? 'model branch'}.{upstream ? ` Includes the unaccepted result of ${upstream.title}.` : ''}</p>}</div>}
             {tab === 'scope' && task ? <div className="scope-details">{task.status === 'draft' ? <><label>Task name<input value={title} onChange={e => setTitle(e.target.value)} /></label><label>Instructions<textarea rows={5} value={instructions} onChange={e => setInstructions(e.target.value)} /></label><button className="primary" disabled={!title.trim() || !instructions.trim()} onClick={() => send({ type: 'task.update', id: task.id, title, instructions, scope: draftScope })}>Save task</button></> : <><h3>Instructions</h3><p className="preserve">{task.instructions}</p><h3>Editable scope</h3><p>{task.scope.wholeDocument ? 'Whole task document copy' : `${task.scope.layerIds.length} layers, ${task.scope.objectIds.length} objects`}</p><ul>{task.scope.layerIds.map(id => <li key={id}>{state.layers.find(l => l.id === id)?.name ?? id}</li>)}</ul></>}<div className="task-facts"><h3>Execution</h3><dl><dt>Model</dt><dd>{modelLabel(state.models, task.model ?? session?.model ?? state.settings.model)}</dd><dt>Input tokens</dt><dd>{task.inputTokens.toLocaleString()}</dd><dt>Output tokens</dt><dd>{task.outputTokens.toLocaleString()}</dd></dl>{task.inputPath && <p className="file-path">Input: {task.inputPath}</p>}{task.workingPath && <button className="quiet" disabled={!!busy} onClick={() => send({ type: 'task.preview', id: task.id })}>Inspect saved copy</button>}</div></div> : <><ActivityList entries={task?.activity ?? session.conversation} activity={tab === 'activity'} />{task?.status === 'draft' && <div className="inspector-empty"><h3>Ready for review</h3><p>{task.instructions}</p><button className="quiet" onClick={() => setTab('scope')}>Review instructions and scope</button></div>}</>}
           </div>

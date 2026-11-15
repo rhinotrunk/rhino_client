@@ -11,6 +11,8 @@ namespace RhinoClient.Agent;
 internal sealed class TaskControl : IDisposable
 {
     private static readonly Dictionary<uint, TaskControl> Controls = [];
+    private static readonly HashSet<string> Claimed = [];
+    private readonly string? _claim;
     public static TaskControl For(uint serial)
     {
         if (serial == 0) serial = RhinoDoc.ActiveDoc?.RuntimeSerialNumber ?? 0;
@@ -33,13 +35,28 @@ internal sealed class TaskControl : IDisposable
     {
         _sourceSerial = serial;
         _preview = new TaskPreview(serial);
-        // Saved documents retain their task history across Rhino restarts. Unsaved models
-        // get a process-scoped identity so unrelated untitled documents never share tasks.
-        var sourcePath = RhinoDoc.FromRuntimeSerialNumber(serial)?.Path;
-        var identity = string.IsNullOrWhiteSpace(sourcePath) ? $"unsaved-{Environment.ProcessId}-{serial}"
-            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(sourcePath))));
-        _directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RhinoClient", "sessions", identity);
+        // Sessions belong to the repository the model is synced with, so they come back after Save As, a restart,
+        // or for an unsaved model. A model with no repository falls back to its file, and an unsaved one to this run.
+        var doc = RhinoDoc.FromRuntimeSerialNumber(serial);
+        static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        var sourcePath = doc?.Path;
+        var pathIdentity = string.IsNullOrWhiteSpace(sourcePath) ? null : Hash(Path.GetFullPath(sourcePath));
+        var repo = doc?.Strings.GetValue(RhinoClient.Sync.WorkingCopy.RepoKey);
+        var server = (doc?.Strings.GetValue(RhinoClient.Sync.WorkingCopy.ServerKey) ?? "").Trim().TrimEnd('/').ToLowerInvariant();
+        var repoIdentity = string.IsNullOrWhiteSpace(repo) ? null : Hash("repo:" + server + "/" + repo.Trim());
+        // Two open models on one repository would overwrite each other's file, so the second one keeps its own.
+        var identity = repoIdentity is not null && Claimed.Add(repoIdentity) ? repoIdentity : pathIdentity ?? $"unsaved-{Environment.ProcessId}-{serial}";
+        _claim = identity == repoIdentity ? repoIdentity : null;
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RhinoClient", "sessions");
+        _directory = Path.Combine(root, identity);
         Directory.CreateDirectory(_directory);
+        // Carry history saved under the file's own folder over to the repository's folder the first time.
+        if (_claim is not null && pathIdentity is not null)
+        {
+            var from = Path.Combine(root, pathIdentity, "tasks.json");
+            var to = Path.Combine(_directory, "tasks.json");
+            try { if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to); } catch (IOException) { }
+        }
         _stateFile = Path.Combine(_directory, "tasks.json");
         try
         {
@@ -166,7 +183,7 @@ internal sealed class TaskControl : IDisposable
     }
 
     /// <summary>Checks a task can be merged and marks it as merging. Call on the UI thread.</summary>
-    public bool TryBeginMerge(string id, out RhinoClient.Sync.TaskMergeRequest request, out string problem)
+    public bool TryBeginMerge(string id, string? resolve, out RhinoClient.Sync.TaskMergeRequest request, out string problem)
     {
         request = null!;
         var task = State.Tasks.FirstOrDefault(t => t.Id == id);
@@ -178,7 +195,7 @@ internal sealed class TaskControl : IDisposable
         else
         {
             task.Merging = true; Publish();
-            request = new(task.Id, task.Title, task.Revision, task.ResultPath, task.BaseCommit);
+            request = new(task.Id, task.Title, task.Revision, task.ResultPath, task.BaseCommit) { Resolve = resolve, Into = task.PrBase };
             problem = "";
             return true;
         }
@@ -303,6 +320,12 @@ internal sealed class TaskControl : IDisposable
                 }
                 Publish(); Pump(); break;
             case "task.pr.close": ClosePullRequest(id); break;
+            case "task.pr.base":
+                var pr = Find(id);
+                var into = AgentJson.Text(cmd, "branch").Trim();
+                if (pr.PrBranch is null || pr.Merging) throw new InvalidOperationException("There is no open pull request to retarget.");
+                if (into.Length == 0 || into.StartsWith("agent/", StringComparison.Ordinal)) throw new InvalidOperationException("Choose a branch to merge into.");
+                pr.PrBase = into; Publish(); break;
             case "task.archive":
             case "task.restore":
             case "task.remove":
@@ -595,6 +618,7 @@ internal sealed class TaskControl : IDisposable
     {
         if (_disposed) return;
         _disposed = true; _preview.Dispose(); RhinoDoc.CloseDocument -= OnClose;
+        if (_claim is not null) Claimed.Remove(_claim);
         foreach (var planner in _planners.Values) planner.Cancellation?.Cancel();
         foreach (var task in State.Tasks)
         {

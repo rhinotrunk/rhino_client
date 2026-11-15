@@ -1,3 +1,4 @@
+import { branchNames, TargetPicker } from "../target";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Check, GitMerge, GitPullRequest, Loader2, Tag, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
     return map;
   }, [tasks]);
   const pending = readyTasks(control);
+  const targets = useMemo(() => branchNames(history.commits), [history.commits]);
 
   // Picking a branch in the header brings its tip into view and selects it.
   const branchName = repo.branch.trim();
@@ -97,6 +99,9 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
                 onPickBranch={(name) => repo.setBranch(name)}
                 current={branchName}
                 onMerge={() => pr && repo.mergePr(pr.id)}
+                targets={targets}
+                onMergeBranch={(source, into) => repo.mergeBranch(source, into)}
+                onRetarget={(name) => pr && repo.retargetPr(pr.id, name)}
                 onClose={() => pr && repo.closePr(pr.id)}
               />
             );
@@ -143,15 +148,17 @@ function Gutter({ gutter, children }: { gutter: number; children: React.ReactNod
 }
 
 function Row({
-  row, gutter, pills, pr, head, busy, selected, onSelect, onCheckout, onPickBranch, onMerge, onClose,
+  row, gutter, pills, pr, head, busy, selected, onSelect, onCheckout, onPickBranch, current, onMerge, onClose, targets, onRetarget, onMergeBranch,
 }: {
   row: LaneRow; gutter: number; pills: Pill[]; pr: AgentTask | undefined; head: boolean; busy: boolean; selected: boolean;
-  onSelect: () => void; onCheckout: () => void; onPickBranch: (name: string) => void; current?: string; onMerge: () => void; onClose: () => void;
+  onSelect: () => void; onCheckout: () => void; onPickBranch: (name: string) => void; current?: string; onMerge: () => void; onClose: () => void; targets: string[]; onRetarget: (name: string) => void; onMergeBranch: (source: string, into: string) => void;
 }) {
   const { commit, lane } = row;
   const agent = commit.author?.kind === "agent";
   const color = palette[row.color % palette.length]!;
   const mid = ROW / 2;
+  // Any branch tip can be merged into another branch of your choice. A pull request has its own picker.
+  const mergeable = !pr ? commit.refs.find((ref) => !ref.startsWith("tag:")) : undefined;
   const first = commit.message.split(/\r?\n/, 1)[0]?.trim() || "(no message)";
   const nodeX = x(lane);
   return (
@@ -191,10 +198,21 @@ function Row({
         {pills.map((pill) => (
           <RefPill key={pill.name} pill={pill} color={color} onPick={() => onPickBranch(pill.name)} />
         ))}
-        {pr ? <PrBadge task={pr} onMerge={onMerge} onClose={onClose} /> : null}
+        {pr ? <PrBadge task={pr} onMerge={onMerge} onClose={onClose} targets={targets} onRetarget={onRetarget} /> : null}
         <span className={cn("max-w-[34ch] truncate", head ? "font-medium" : "")} title={commit.message}>{first}</span>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2 pl-4 text-[11px] text-muted-foreground">
+        {mergeable ? (
+          <select
+            aria-label={`Merge ${mergeable} into…`} title={`Merge ${mergeable} into another branch`} value="" disabled={busy}
+            onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}
+            onChange={(event) => { if (event.target.value) onMergeBranch(mergeable, event.target.value); }}
+            className="target-picker max-w-[18ch] invisible group-hover:visible group-focus-visible:visible focus:visible disabled:opacity-40"
+          >
+            <option value="" disabled>Merge into…</option>
+            {targets.filter((name) => name !== mergeable).map((name) => <option key={name} value={name}>{name}{name === current ? " (model)" : ""}</option>)}
+          </select>
+        ) : null}
         <button
           type="button"
           disabled={busy}
@@ -242,14 +260,15 @@ function RefPill({ pill, color, onPick }: { pill: Pill; color: string; onPick: (
 }
 
 // An open pull request: the agent branch tip waiting for approval, with its decisions right on the row.
-function PrBadge({ task, onMerge, onClose }: { task: AgentTask; onMerge: () => void; onClose: () => void }) {
+function PrBadge({ task, onMerge, onClose, targets, onRetarget }: { task: AgentTask; onMerge: () => void; onClose: () => void; targets: string[]; onRetarget: (name: string) => void }) {
   return (
     <span
       className="inline-flex h-[28px] shrink-0 items-center gap-1 rounded-[7px] border pl-2 text-[12px] leading-none"
       style={{ color: AGENT, borderColor: `color-mix(in srgb, ${AGENT} 55%, transparent)`, background: `color-mix(in srgb, ${AGENT} 12%, transparent)` }}
     >
       <GitPullRequest size={14} />
-      <span className="pr-1">Awaiting approval</span>
+      <span className="whitespace-nowrap pr-0.5">into</span>
+      <TargetPicker value={task.prBase ?? "main"} options={targets} onChange={onRetarget} />
       {task.merging ? (
         <Loader2 size={15} className="mx-1.5 animate-spin" />
       ) : (
