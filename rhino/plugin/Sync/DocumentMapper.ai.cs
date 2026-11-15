@@ -157,9 +157,10 @@ internal static class DocumentMapper
         }
     }
 
-    /// <param name="removeUnlisted">
-    /// Also delete model objects the commit does not list, so the document matches the commit. Only pass it
-    /// when the document has no unpushed edits (a merged agent task).
+    /// <param name="replace">
+    /// Make the model match the commit: overwrite objects that differ without a review and delete model
+    /// objects the commit does not list. Objects this client does not sync, such as block instances, are kept.
+    /// Unpushed edits are lost, so only pass it once they have been pushed or the user chose to discard them.
     /// </param>
     internal static Dictionary<string, uint> Apply(
         RhinoDoc doc,
@@ -167,13 +168,13 @@ internal static class DocumentMapper
         IReadOnlyDictionary<string, byte[]> blobs,
         IReadOnlyList<DecodedObject> objects,
         IReadOnlyDictionary<string, ConflictChoice> resolutions,
-        bool removeUnlisted = false)
+        bool replace = false)
     {
         var settings = entities.Single(entity => entity.Kind == EntityKinds.Settings);
         var layers = ParentsFirst(entities.Where(entity => entity.Kind == EntityKinds.Layer).ToList());
         var settingsAttributes = RequireAttributes(settings, blobs);
         var layerAttributes = layers.ToDictionary(layer => layer.Id, layer => RequireAttributes(layer, blobs), StringComparer.Ordinal);
-        return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, objects, resolutions, removeUnlisted);
+        return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, objects, resolutions, replace);
     }
 
     private static Dictionary<string, uint> ApplyPrepared(
@@ -183,11 +184,11 @@ internal static class DocumentMapper
         Dictionary<string, JsonObject> layerAttributes,
         IReadOnlyList<DecodedObject> objects,
         IReadOnlyDictionary<string, ConflictChoice> resolutions,
-        bool removeUnlisted)
+        bool replace)
     {
         var redraw = doc.Views.RedrawEnabled;
         doc.Views.RedrawEnabled = false;
-        var undo = doc.BeginUndoRecord("RhinoTrunk pull");
+        var undo = doc.BeginUndoRecord(replace ? "RhinoTrunk checkout" : "RhinoTrunk pull");
         try
         {
             ApplySettings(doc, settingsAttributes);
@@ -199,24 +200,18 @@ internal static class DocumentMapper
                 UpsertLayer(doc, id, ParentGuid(layer), layerAttributes[layer.Id]);
             }
 
-            EnsureCurrent(doc, keep);
-            DeleteExtraLayers(doc, keep);
-            if (removeUnlisted)
-            {
-                var listed = new HashSet<Guid>(objects.Select(item => ParseObjectId(item.Entity.Id)));
-                var extras = doc.Objects.GetObjectList(ModelSettings())
-                    .Where(obj => obj.Attributes.Space == ActiveSpace.ModelSpace && !ShouldSkip(obj) && !listed.Contains(obj.Id))
-                    .ToList();
-                foreach (var extra in extras) doc.Objects.Delete(extra, true);
-            }
-
+            if (replace) DeleteUnlistedObjects(doc, objects);
             var deleted = DeletedModelObjects(doc);
             var serials = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var item in objects)
             {
                 ConflictChoice? choice = resolutions.TryGetValue(item.Entity.Id, out var selected) ? selected : null;
-                PlaceObject(doc, item, choice, deleted, serials);
+                PlaceObject(doc, item, choice, replace, deleted, serials);
             }
+
+            // Rhino will not delete a layer that still holds objects, so this runs after objects move to the commit's layers.
+            EnsureCurrent(doc, keep);
+            DeleteExtraLayers(doc, keep);
             if (undo != 0) doc.EndUndoRecord(undo);
             return serials;
         }
@@ -470,6 +465,19 @@ internal static class DocumentMapper
         return false;
     }
 
+    private static void DeleteUnlistedObjects(RhinoDoc doc, IReadOnlyList<DecodedObject> objects)
+    {
+        var listed = new HashSet<Guid>(objects.Select(item => ParseObjectId(item.Entity.Id)));
+        var extras = doc.Objects.GetObjectList(ModelSettings())
+            .Where(obj => obj.Attributes.Space == ActiveSpace.ModelSpace && !ShouldSkip(obj) && !listed.Contains(obj.Id))
+            .ToList();
+        foreach (var extra in extras)
+        {
+            if (!doc.Objects.Delete(extra, true, true))
+                throw new SyncException($"Could not delete object {extra.Id:D}, which is not in the commit.");
+        }
+    }
+
     internal static Guid ParseObjectId(string id) => ParseGuid(id, "object");
 
     internal static Dictionary<Guid, RhinoObject> DeletedModelObjects(RhinoDoc doc)
@@ -508,6 +516,7 @@ internal static class DocumentMapper
         RhinoDoc doc,
         DecodedObject item,
         ConflictChoice? choice,
+        bool replace,
         Dictionary<Guid, RhinoObject> deleted,
         Dictionary<string, uint> serials)
     {
@@ -520,6 +529,8 @@ internal static class DocumentMapper
         }
 
         var live = doc.Objects.FindId(id);
+        if (replace && choice is null && (live ?? deleted.GetValueOrDefault(id)) is { } existing && !ContentMatches(doc, existing, item))
+            choice = ConflictChoice.KeepIncoming;
         if (live is null && deleted.TryGetValue(id, out var dead))
         {
             var restore = choice == ConflictChoice.KeepIncoming || (choice is null && ContentMatches(doc, dead, item));

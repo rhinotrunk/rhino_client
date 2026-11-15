@@ -1,19 +1,67 @@
+using RhinoTrunk.Client;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 
 namespace RhinoClient.Sync;
 
-/// <summary>Starts the local RhinoTrunk server when a panel request finds it is not listening.</summary>
+/// <summary>
+/// Starts the local RhinoTrunk server when a panel request finds it is not listening, and restarts one it
+/// started when that server turns out to be older than this plugin.
+/// </summary>
 internal static class LocalServer
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static Process? _process;
+    private static DateTime _startedUtc;
 
     internal static bool IsLoopback(string? server)
     {
         if (!Uri.TryCreate(server, UriKind.Absolute, out var uri)) return false;
         return uri.IsLoopback && uri.Scheme == "http";
+    }
+
+    /// <summary>
+    /// A 404 without the server's JSON error. The server writes an <c>ApiError</c> for every failure it raises, so
+    /// this means it has no such route: it was built before the endpoint this plugin called existed.
+    /// </summary>
+    internal static bool IsMissingRoute(Exception exception) =>
+        exception is RhinoTrunkApiException { StatusCode: HttpStatusCode.NotFound } api && api.Error.Code == "http_404";
+
+    /// <summary>Whether <see cref="RecoverAsync"/> can do anything about this failure.</summary>
+    internal static bool CanRecover(string? server, Exception exception) =>
+        IsLoopback(server) && (exception is HttpRequestException || IsMissingRoute(exception));
+
+    /// <summary>Starts the server when it is not listening, or restarts it when it is missing a route.</summary>
+    internal static Task RecoverAsync(string server, Exception failure, CancellationToken cancellationToken) =>
+        IsMissingRoute(failure) ? RestartOutdatedAsync(server, cancellationToken) : EnsureRunningAsync(server, cancellationToken);
+
+    private static async Task RestartOutdatedAsync(string server, CancellationToken cancellationToken)
+    {
+        if (!IsLoopback(server)) return;
+        var asked = DateTime.UtcNow;
+        await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_process is not { HasExited: false } running)
+                throw new SyncException($"The server at {Origin(server)} is an older build that is missing endpoints this plugin uses. It was not started by this Rhino session, so stop it yourself and try again; the plugin then starts the current server.");
+
+            // Another document may have restarted it while this one waited.
+            if (_startedUtc <= asked)
+            {
+                RhinoAppNotice("The server is older than this plugin. Restarting it…");
+                running.Kill(entireProcessTree: true);
+                await running.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                _process = null;
+            }
+        }
+        finally
+        {
+            Gate.Release();
+        }
+
+        await EnsureRunningAsync(server, cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task EnsureRunningAsync(string server, CancellationToken cancellationToken)
@@ -46,6 +94,7 @@ internal static class LocalServer
             }
 
             _process = process;
+            _startedUtc = DateTime.UtcNow;
             await WaitUntilListeningAsync(process, server, log, cancellationToken).ConfigureAwait(false);
         }
         finally

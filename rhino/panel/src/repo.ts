@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bridge } from "./protocol/bridge";
-import type { AgentTask, ControlState, GraphCommit } from "./protocol/events";
+import type { AgentTask, ControlState, GraphCommit, UnpushedChoice } from "./protocol/events";
 
 export type History = {
   repo: string;
@@ -34,6 +34,11 @@ export function useRepo(bridge: Bridge) {
   const [tick, setTick] = useState(0);
   const [control, setControl] = useState<ControlState>();
   const [fresh, setFresh] = useState("");
+  const [unpushed, setUnpushed] = useState<{ commit: string; changes: number; branch?: string } | null>(null);
+  const [detached, setDetached] = useState<{ commit: string } | null>(null);
+  const [newBranch, setNewBranch] = useState("");
+  const branchRef = useRef("main");
+  const checkoutTarget = useRef<string | undefined>(undefined);
   const [repos, setRepos] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
   const [branches, setBranches] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
@@ -73,6 +78,13 @@ export function useRepo(bridge: Bridge) {
           error: event.error ? event.message : "",
           loaded: true,
         });
+      } else if (event.type === "checkout.unpushed") {
+        setUnpushed({ commit: event.commit, changes: event.changes, branch: checkoutTarget.current });
+      } else if (event.type === "push.detached") {
+        setDetached({ commit: event.commit });
+        setNewBranch(`${branchRef.current.trim() || "branch"}-${event.commit.replace(/^sha256:/, "").slice(0, 7)}`);
+      } else if (event.type === "head") {
+        setHistory((existing) => (existing.repo === event.repo ? { ...existing, head: event.commit ?? "" } : existing));
       } else if (event.type === "status") {
         setReady(connected);
         setBusy(event.busy);
@@ -151,29 +163,63 @@ export function useRepo(bridge: Bridge) {
     setStatus(text);
   }
 
+  branchRef.current = branch;
   const idle = ready && !busy;
+  const clearPrompts = () => { setUnpushed(null); setDetached(null); };
+  const sendPush = (target: string) => {
+    const spec = snapshot();
+    clearPrompts();
+    begin("Pushing…");
+    bridge.send({ type: "push", ...spec, branch: target, message: message.trim() || "Update geometry" });
+    setMessage("");
+  };
+  const sendCheckout = (commit: string, target: string, choice: UnpushedChoice) => {
+    const spec = snapshot();
+    clearPrompts();
+    checkoutTarget.current = target;
+    begin("Checking out…");
+    bridge.send({ type: "checkout", ...spec, branch: target, commit, message: message.trim(), unpushed: choice });
+  };
   return {
-    bridge, server, repo, branch, message, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
+    bridge, server, repo, branch, message, unpushed, detached, newBranch, setNewBranch, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
     idle,
     setServer, setRepo, setBranch, setMessage, remember, requestRepos, requestBranches, chooseRepo,
     pull() {
       const spec = snapshot();
+      clearPrompts();
       begin("Pulling…");
       bridge.send({ type: "pull", ...spec, branch: branch.trim() });
     },
     push() {
-      const spec = snapshot();
-      begin("Pushing…");
-      bridge.send({ type: "push", ...spec, branch: branch.trim(), message: message.trim() || "Update geometry" });
-      setMessage("");
+      sendPush(branch.trim());
     },
+    // Checkout replaces the model. With unpushed edits the host stops and the panel asks what to do.
     checkout(commit: string, onBranch?: string) {
       if (!idle) return;
-      const spec = snapshot();
       const target = onBranch ?? branch.trim();
       if (onBranch) setBranch(onBranch);
-      begin("Checking out…");
-      bridge.send({ type: "checkout", ...spec, branch: target, commit });
+      sendCheckout(commit, target, "ask");
+    },
+    resolveCheckout(choice: UnpushedChoice) {
+      if (!unpushed) return;
+      sendCheckout(unpushed.commit, unpushed.branch ?? branch.trim(), choice);
+    },
+    cancelCheckout() {
+      setUnpushed(null);
+      setError(false);
+      setStatus("Checkout cancelled. The model was not changed.");
+    },
+    // The model is not at the tip of its branch, so a push has to go to another branch.
+    pushToNewBranch() {
+      const name = newBranch.trim();
+      if (!name || name === branch.trim()) return;
+      setBranch(name);
+      sendPush(name);
+    },
+    cancelDetached() {
+      setDetached(null);
+      setError(false);
+      setStatus("Push cancelled. Nothing was pushed and the model was not changed.");
     },
     refresh() {
       if (!idle) return;
@@ -201,4 +247,21 @@ export function readyTasks(control: ControlState | undefined): AgentTask[] {
   return (control?.tasks ?? []).filter(
     (task) => !task.deleted && !task.archived && task.status === "ready" && !task.prBranch && !task.mergedBranch,
   );
+}
+
+// Mirrors Names.IsValidRepo in the git engine.
+const validRepo = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+export function toRepoName(value: string): string {
+  const text = value.trim();
+  if (validRepo.test(text)) return text;
+  const name = text
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+/, "")
+    .slice(0, 64)
+    .replace(/[._-]+$/, "");
+  return name || text;
 }

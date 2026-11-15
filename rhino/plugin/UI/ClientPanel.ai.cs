@@ -87,7 +87,9 @@ public sealed class ClientPanel : Panel
                 case "checkout":
                     _ = Checkout(
                         new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
-                        Text(command, "commit"));
+                        Text(command, "commit"),
+                        Unpushed(Text(command, "unpushed")),
+                        Text(command, "message"));
                     break;
                 case "push":
                     _ = Push(
@@ -119,8 +121,19 @@ public sealed class ClientPanel : Panel
     internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) =>
         RunAsync("Pulling…", token => _sync.PullAsync(target, interactive, token));
 
-    internal Task<SyncResult> Checkout(SyncTarget target, string commit, bool interactive = true) =>
-        RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, interactive, token));
+    internal async Task<SyncResult> Checkout(SyncTarget target, string commit, UnpushedChoice unpushed, string message)
+    {
+        var result = await RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, unpushed, message, token));
+        if (result.Unpushed > 0) Post(new { type = "checkout.unpushed", commit, changes = result.Unpushed });
+        return result;
+    }
+
+    private static UnpushedChoice Unpushed(string value) => value switch
+    {
+        "push" => UnpushedChoice.Push,
+        "discard" => UnpushedChoice.Discard,
+        _ => UnpushedChoice.Ask,
+    };
 
     internal Task<SyncResult> Push(SyncTarget target, string message) =>
         RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
@@ -215,7 +228,9 @@ public sealed class ClientPanel : Panel
         {
             var result = await action(_unload.Token);
             _busy = false;
-            SendStatus(result.Message, !result.Ok, false);
+            if (result.Detached is { } detached) Post(new { type = "push.detached", commit = detached });
+            SendStatus(result.Message, !result.Ok && !result.Asking, false);
+            SendHead();
             return result;
         }
         catch (OperationCanceledException)
@@ -228,6 +243,7 @@ public sealed class ClientPanel : Panel
         {
             _busy = false;
             SendStatus(ex.Message, true, false);
+            SendHead();
             return SyncResult.Fail(ex.Message);
         }
     }
@@ -292,7 +308,7 @@ public sealed class ClientPanel : Panel
         {
             var graph = await _sync.LoadGraphAsync(server, requested, _unload.Token);
             if (_closed || generation != _graphGeneration) return;
-            var head = await OnUiAsync(() => _sync.ReadBase());
+            var head = await OnUiAsync(() => _sync.ReadBaseCommit());
             Post(new
             {
                 type = "graph",
@@ -363,6 +379,28 @@ public sealed class ClientPanel : Panel
         {
             SendStatus(ex.Message, true, false);
         }
+
+        SendHead();
+    }
+
+    // The commit the model is on, so the history graph can mark it.
+    private void SendHead()
+    {
+        if (_closed) return;
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            if (_closed || _busy) return;
+            try
+            {
+                var target = _sync.ReadTarget();
+                var commit = _sync.ReadBaseCommit();
+                _bridge.Post(new { type = "head", repo = target.Repo, branch = target.Branch, commit });
+            }
+            catch (Exception)
+            {
+                // Never let an exception escape a UI-thread action: it aborts Rhino on macOS.
+            }
+        });
     }
 
     private void SendStatus(string message, bool error, bool busy)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Bot, ChevronDown, ChevronRight, GitBranch, GitPullRequest, Loader2, RefreshCw, Settings2, Database, Check, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { openPrs, type Repo } from "./repo";
+import { openPrs, toRepoName, type Repo } from "./repo";
 
 export type TabId = "graph" | "agents";
 
@@ -49,7 +49,7 @@ export function Header({
               onOpen={() => repo.requestRepos()}
               onChoose={(name) => { repo.chooseRepo(name); setOpen(null); }}
               onCreate={(name) => { repo.chooseRepo(name, true); setOpen(null); }}
-              sanitize={(name) => name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "")}
+              sanitize={toRepoName}
               hint="Lowercase letters, digits, . _ -. The repository is created on your first push."
             />
           ) : null}
