@@ -197,22 +197,21 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 @media (max-width: 480px) {
   .workspace-header { padding: 10px 12px; }
   .connection { font-size: 10px; }
-  .workspace-body { display: flex; flex-direction: column; overflow-y: auto; }
-  .task-sidebar { max-height: 245px; flex-shrink: 0; border-right: 0; border-bottom: 1px solid var(--line); }
+  .workspace-body { display: flex; flex-direction: column; overflow: hidden; }
+  .task-sidebar { max-height: 25dvh; flex-shrink: 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .sidebar-heading { padding: 7px 10px 2px 14px; }
   .sidebar-summary { padding: 5px 14px; }
   input.task-search { display: none; }
-  .tree-scroll { min-height: 65px; padding-bottom: 5px; }
+  .tree-scroll { min-height: 0; padding-bottom: 5px; }
   .tree-row { min-height: 40px; }
   .tree-select { flex-direction: row; align-items: center; padding: 8px 10px 8px 4px; }
   .tree-title { flex: 1; }
   .sidebar-footer { padding: 7px 12px; }
   .sidebar-footer p { display: none; }
   .sidebar-footer .primary { padding: 7px 10px; }
-  .task-inspector { flex: 1 0 440px; min-height: 440px; }
+  .task-inspector { flex: 1; min-height: 0; }
   .inspector-empty h3 { font-size: 17px; }
   .inspector-heading h2 { font-size: 15px; }
-  .inspector-content { max-height: 480px; }
 }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 .new-task-page { flex: 1; overflow: auto; }
@@ -263,18 +262,20 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .session-nav > span { min-width: 0; flex: 1; }
 .session-nav strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
 .session-nav small { display: block; color: var(--subtle); font-size: 10px; margin-top: 3px; }
-.session-plan { margin: 4px 24px 24px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
-.session-plan-heading { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; background: var(--soft); }
+.session-plan { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: min(240px, 40%); border-bottom: 1px solid var(--line); background: var(--panel); }
+.session-plan-heading { padding: 6px 20px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; background: var(--soft); }
 .session-plan-heading h3 { font-size: 12px; }
+.session-plan-toggle { display: flex; align-items: center; gap: 6px; padding: 6px 0; text-align: left; }
+.session-plan-toggle svg { flex-shrink: 0; }
+.session-plan-body { display: flex; flex-direction: column; min-height: 0; }
+.session-plan-body[hidden] { display: none; }
+.session-plan-tasks { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .session-plan-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; text-align: left; width: 100%; padding: 9px 12px; border-top: 1px solid var(--line); }
 .session-plan-row:hover { background: var(--soft); }
 .session-plan-row > div { min-width: 0; }
 .session-plan-row > div > span { display: block; font-size: 12px; overflow-wrap: anywhere; }
-.session-plan-row small { display: block; margin-top: 5px; font-size: 10px; color: var(--subtle); }
-.session-plan-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
-.session-plan-footer > span { font-size: 10px; color: var(--subtle); max-width: 240px; line-height: 1.7; }
 .notice > svg { display: inline-block; vertical-align: middle; margin-right: 5px; }
-@media (max-width: 480px) { .session-tree-group { margin-bottom: 8px; } .session-nav { padding: 7px 9px; } .session-plan { margin: 4px 14px 18px; } .session-plan-footer { flex-wrap: wrap; } }
+@media (max-width: 480px) { .session-tree-group { margin-bottom: 8px; } .session-nav { padding: 7px 9px; } .session-plan { max-height: 30%; } .session-plan-heading { padding-left: 14px; padding-right: 14px; } }
 .task-branch { flex-shrink: 0; color: var(--blue); }
 .viewport-preview { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 /* Dense tree rows keep the conversation and execution controls in reach. */
@@ -299,6 +300,4 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .plan-task-title { text-align: left; flex: 1; min-width: 0; }
 .plan-task-title span { display: block; font-size: 12px; }
 .session-plan-row { padding: 6px 10px; overflow: visible; }
-.session-plan { overflow: visible; }
-.session-plan-row small { margin-top: 2px; }
 .session-return { text-align: left; color: var(--blue); }

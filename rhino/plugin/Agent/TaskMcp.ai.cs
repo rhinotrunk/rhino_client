@@ -19,6 +19,7 @@ internal sealed class TaskMcp : IDisposable
     private readonly Action<string, string> _log;
     private readonly Action _save;
     private readonly CancellationToken _ct;
+    private readonly WorkerBudget _budget = new();
     public string Url { get; }
 
     public TaskMcp(TaskEntry task, bool planner, Func<JsonElement, object> plan,
@@ -96,9 +97,11 @@ internal sealed class TaskMcp : IDisposable
                     var result = await RhinoThread.Run(() =>
                     {
                         _ct.ThrowIfCancellationRequested();
+                        _budget.BeginTool();
                         _log("tool", $"{name}\n{arguments.GetRawText()}");
                         if (_planner && name is not ("propose_plan" or "get_context" or "list_objects" or "get_object")) throw new InvalidOperationException("Planner cannot edit geometry.");
                         var output = _planner && name == "propose_plan" ? _plan(arguments) : Execute(name, arguments);
+                        _budget.Succeeded();
                         _log("result", JsonSerializer.Serialize(output, AgentJson.Options));
                         return output;
                     });
@@ -106,8 +109,18 @@ internal sealed class TaskMcp : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    await RhinoThread.Run(() => { _log("error", ex.Message); return true; });
-                    response = new { jsonrpc = "2.0", id = id.Clone(), result = new { content = new[] { new { type = "text", text = ex.Message } }, isError = true } };
+                    var message = await RhinoThread.Run(() =>
+                    {
+                        _ct.ThrowIfCancellationRequested();
+                        var failure = ex;
+                        try { if (failure is not WorkerLimitException) _budget.Failed(); }
+                        catch (WorkerLimitException limit) { failure = limit; }
+                        if (failure is WorkerLimitException) _task.Error = failure.Message;
+                        _log("error", failure.Message);
+                        if (failure is WorkerLimitException) _task.Cancellation?.Cancel();
+                        return failure.Message;
+                    });
+                    response = new { jsonrpc = "2.0", id = id.Clone(), result = new { content = new[] { new { type = "text", text = message } }, isError = true } };
                 }
             }
             else response = new { jsonrpc = "2.0", id = id.Clone(), error = new { code = -32601, message = "Unknown method" } };
@@ -115,7 +128,7 @@ internal sealed class TaskMcp : IDisposable
             ctx.Response.ContentType = "application/json";
             await ctx.Response.OutputStream.WriteAsync(bytes);
         }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or IOException or HttpListenerException or ObjectDisposedException)
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or IOException or HttpListenerException or ObjectDisposedException or OperationCanceledException)
         { try { ctx.Response.StatusCode = 400; } catch (ObjectDisposedException) { } }
         finally { try { ctx.Response.Close(); } catch (ObjectDisposedException) { } }
     }

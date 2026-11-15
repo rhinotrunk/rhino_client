@@ -307,7 +307,7 @@ internal sealed class TaskControl : IDisposable
                 if (upstream.Paused || upstream.Archived || upstream.Deleted || upstream.Status != "ready" || upstream.ResultPath is null) continue;
                 task.InputPath = upstream.ResultPath;
             }
-            task.Status = "running"; task.StartedAt = DateTimeOffset.UtcNow; task.FinishedAt = null;
+            task.Status = "running"; task.Error = null; task.StartedAt = DateTimeOffset.UtcNow; task.FinishedAt = null;
             task.Cancellation = new(); slots--;
             _ = RunTask(task);
         }
@@ -362,10 +362,15 @@ internal sealed class TaskControl : IDisposable
             }, (k, t) => Log(planner, k, t), () => { }, planner.Cancellation!.Token);
             var existing = State.Tasks.Where(t => t.SessionId == session.Id && !t.Deleted && !t.Archived).Select(t => new { t.Id, t.Title, t.Status, t.ParentId, t.Paused, summary = t.Activity.LastOrDefault(a => a.Kind == "assistant")?.Text });
             var prompt = "You coordinate a Rhino modeling session. Planning is the beginning of this session, not a separate user workflow. Inspect model context before planning. For an initial request, call propose_plan once with the smallest useful set of concrete tasks: a simple request needs only one task. Shared prerequisites are parents. Every requested design option MUST be its own sibling task and its own document copy. Never bundle several options in a task such as Develop-three-versions. A grid plus three facade options requires four tasks: one grid parent and three facade children. Do not execute geometry. For follow-up discussion, answer questions or propose additional tasks only when requested. Existing task IDs may be used as parentKey. Do not duplicate existing tasks. The human must launch reviewed tasks; acceptance is deferred. Available worker operations: polyline/box/sphere creation, move, rotate, scale, copy, delete. No scripts or arbitrary commands.\nExisting tasks: " + JsonSerializer.Serialize(existing, AgentJson.Options) + "\nUser: " + request;
+            prompt += $"\nClarify ambiguous dimensions, spacing and bay counts in chat before proposing tasks. A count of units or bays is not a spacing in document units. Never turn an ambiguous count into thousands of objects. Include explicit dimensions, spacing and estimated object count in geometry task instructions. Each worker turn permits at most {WorkerBudget.MaxToolCalls} tool calls; split larger work only when its scale is explicit.";
             await CodexRunner.Run(planner, State, _directory, mcp.Url, prompt, line => ParseEvent(planner, line), p => planner.Process = p, planner.Cancellation.Token);
         }
         catch (OperationCanceledException) { await RhinoThread.Run(() => { Log(planner, "status", "Session planning stopped."); return true; }); }
-        catch (Exception ex) { await RhinoThread.Run(() => { Log(planner, "error", ex.Message); return true; }); }
+        catch (Exception ex)
+        {
+            planner.Cancellation?.Cancel();
+            await RhinoThread.Run(() => { Log(planner, "error", ex.Message); return true; });
+        }
         finally
         {
             await RhinoThread.Run(() =>
@@ -397,6 +402,7 @@ internal sealed class TaskControl : IDisposable
             });
             using var mcp = new TaskMcp(task, false, _ => throw new InvalidOperationException(), (k, t) => Log(task, k, t), () => { WriteCopy(task.Document!, task.WorkingPath!); if (_previewTaskId == task.Id) _preview.Show(task.Document!, false); }, token);
             var prompt = "You are a Rhino geometry worker. Use only the rhino MCP tools to inspect and edit your assigned document copy. Begin with get_context and list_objects. Scope is enforced by the tools. Never use scripts, shell, external MCP servers, or ActiveDoc. Coordinates use document units. Only polyline/box/sphere creation, transforms and deletion are available. If your request requires unsupported operations or scope expansion, explain that limitation rather than claiming success. Do the requested geometry work, then summarize actual changes and limitations. The shared model is unchanged and PR acceptance is deferred.\nTask: " + task.Title + "\n" + task.Instructions;
+            prompt += $"\nBefore editing, estimate the number of objects and tool calls. Your turn is limited to {WorkerBudget.MaxToolCalls} tool calls and stops after {WorkerBudget.MaxConsecutiveErrors} consecutive tool errors. If dimensions or counts are ambiguous, or the requested work exceeds the limit, explain and request clarification or a smaller task before creating geometry. Do not repeatedly retry invalid geometry or unsupported operations.";
             await CodexRunner.Run(task, State, _directory, mcp.Url, prompt, line => ParseEvent(task, line), p => task.Process = p, token);
             await RhinoThread.Run(() =>
             {
@@ -410,8 +416,13 @@ internal sealed class TaskControl : IDisposable
                 return true;
             });
         }
-        catch (OperationCanceledException) { await RhinoThread.Run(() => { task.Status = "stopped"; Log(task, "status", "Stopped. Saved geometry and activity are retained."); return true; }); }
-        catch (Exception ex) { await RhinoThread.Run(() => { task.Status = "failed"; task.Error = ex.Message; Log(task, "error", ex.Message); return true; }); }
+        catch (OperationCanceledException) { await RhinoThread.Run(() => { task.Status = task.Error is null ? "stopped" : "failed"; Log(task, "status", "Stopped. Saved geometry and activity are retained."); return true; }); }
+        catch (Exception ex)
+        {
+            // Revoke already accepted MCP calls before closing the task document.
+            task.Cancellation?.Cancel();
+            await RhinoThread.Run(() => { task.Status = "failed"; task.Error = ex.Message; Log(task, "error", ex.Message); return true; });
+        }
         finally
         {
             await RhinoThread.Run(() =>
@@ -424,6 +435,7 @@ internal sealed class TaskControl : IDisposable
     }
     private Task ParseEvent(TaskEntry task, string line) => RhinoThread.Run(() =>
     {
+        if (task.Cancellation?.IsCancellationRequested is not false) return false;
         try
         {
             using var json = JsonDocument.Parse(line);

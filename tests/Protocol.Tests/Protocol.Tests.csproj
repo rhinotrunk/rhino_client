@@ -2,6 +2,8 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup>
   <ItemGroup>
     <Compile Include="../../rhino/plugin/Agent/TaskModels.ai.cs" Link="TaskModels.ai.cs" />
+    <Compile Include="../../rhino/plugin/Agent/WorkerBudget.ai.cs" Link="WorkerBudget.ai.cs" />
+    <Compile Include="../../rhino/plugin/Agent/CodexRunner.ai.cs" Link="CodexRunner.ai.cs" />
     <Compile Include="../../rhino/plugin/UI/PanelBridge.ai.cs" Link="PanelBridge.ai.cs" />
   </ItemGroup>
 </Project>

@@ -30,8 +30,15 @@ internal static class CodexRunner
     }
 
     public static async Task Run(TaskEntry task, ControlState settings, string directory, string url, string prompt,
-        Func<string, Task> onEvent, Action<Process> started, CancellationToken ct)
+        Func<string, Task> onEvent, Action<Process> started, CancellationToken ct,
+        TimeSpan? idleTimeout = null, TimeSpan? turnTimeout = null)
     {
+        ct.ThrowIfCancellationRequested();
+        var idlePeriod = idleTimeout ?? WorkerBudget.IdleTimeout;
+        using var idle = new CancellationTokenSource(idlePeriod);
+        using var deadline = new CancellationTokenSource(turnTimeout ?? WorkerBudget.TurnTimeout);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, idle.Token, deadline.Token);
+        var token = lifetime.Token;
         var psi = new ProcessStartInfo(settings.CodexPath)
         {
             WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
@@ -53,38 +60,51 @@ internal static class CodexRunner
         foreach (var arg in args) psi.ArgumentList.Add(arg);
         using var process = new Process { StartInfo = psi };
         if (!process.Start()) throw new InvalidOperationException("Could not launch Codex CLI.");
-        started(process);
-        using var registration = ct.Register(() => { try { process.Kill(true); } catch (InvalidOperationException) { } });
+        using var registration = token.Register(() => { try { process.Kill(true); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { } });
         var stderr = ReadErrors();
         try
         {
+            started(process);
             var completed = false;
-            await process.StandardInput.WriteAsync(prompt);
+            await process.StandardInput.WriteAsync(prompt.AsMemory(), token);
             process.StandardInput.Close();
-            while (await process.StandardOutput.ReadLineAsync(ct) is { } line)
+            while (await process.StandardOutput.ReadLineAsync(token) is { } line)
             {
-                await onEvent(line);
+                idle.CancelAfter(idlePeriod);
+                await onEvent(line).WaitAsync(token);
                 try { using var parsed = JsonDocument.Parse(line); if (AgentJson.Text(parsed.RootElement, "type") == "turn.completed") completed = true; }
                 catch (JsonException) { }
             }
-            await process.WaitForExitAsync(ct);
-            var diagnostic = await stderr;
+            await process.WaitForExitAsync(token);
+            var diagnostic = await stderr.WaitAsync(token);
             ct.ThrowIfCancellationRequested();
             if (process.ExitCode != 0) throw new InvalidOperationException($"Codex exited with code {process.ExitCode}. {diagnostic}");
             if (!completed) throw new InvalidOperationException("Codex exited without confirming turn completion. Inspect activity before continuing.");
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(deadline.IsCancellationRequested
+                ? "Worker exceeded the time limit. Review the saved copy and split the task before resuming."
+                : "Worker stopped responding. Saved geometry is retained; review Records before resuming.");
+        }
         finally
         {
             // Parsing errors must not leave a worker with live tool access behind.
-            try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { }
+            lifetime.Cancel();
+            try { if (!process.HasExited) process.Kill(true); } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            await stderr;
         }
 
         async Task<string> ReadErrors()
         {
             // Bound diagnostics; do not persist the complete CLI environment or config.
             string last = "";
-            while (await process.StandardError.ReadLineAsync() is { } line)
-                if (!string.IsNullOrWhiteSpace(line)) last = line.Length > 1200 ? line[..1200] : line;
+            try
+            {
+                while (await process.StandardError.ReadLineAsync(token) is { } line)
+                    if (!string.IsNullOrWhiteSpace(line)) last = line.Length > 1200 ? line[..1200] : line;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             return last;
         }
     }

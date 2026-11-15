@@ -2,6 +2,9 @@ using System.Text.Json;
 using RhinoClient.Agent;
 using RhinoClient.UI;
 
+if (args.FirstOrDefault() == "exec") { await WorkerTests.FakeWorker(); return; }
+await WorkerTests.Run();
+
 var view = new Eto.Forms.WebView();
 using var bridge = new PanelBridge(view, _ => { });
 view.Load();
