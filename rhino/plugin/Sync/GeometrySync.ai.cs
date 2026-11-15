@@ -68,6 +68,13 @@ public sealed class GeometrySync : IDisposable
         return new SyncTarget(_copy.Server, _copy.Repo, _copy.Branch);
     }
 
+    /// <summary>The commit the document is based on, or null before its first pull or push. Call on Rhino's UI thread.</summary>
+    public string? ReadBaseCommit()
+    {
+        _copy.Read();
+        return _copy.BaseCommit;
+    }
+
     public Task<SyncResult> PushAsync(SyncTarget target, string message, CancellationToken cancellationToken = default) =>
         Run(() => PushCore(target, message, cancellationToken), cancellationToken);
 

@@ -3,6 +3,7 @@ import type { GraphCommit } from "../protocol/events";
 import { graphHash, shortHash, toStory } from "./story";
 
 const font = 'normal 12px -apple-system, "Segoe UI", sans-serif';
+const currentFont = '600 12px -apple-system, "Segoe UI", sans-serif';
 const svgNs = "http://www.w3.org/2000/svg";
 let fitted: MutationObserver | undefined;
 
@@ -13,11 +14,13 @@ type DrawnCommit = {
 };
 
 // Leave orientation unset. Gitgraph then draws the last commit at the top,
-// which is the newest one after the oldest-first walk.
+// which is the newest one after the oldest-first walk. `current` is the
+// commit the model is on; it is tagged HEAD.
 export function renderHistory(
   container: HTMLElement,
   commits: readonly GraphCommit[],
   scheme: "light" | "dark",
+  current: string | null,
   onCheckout: (id: string) => void,
 ): void {
   fitted?.disconnect();
@@ -75,18 +78,22 @@ export function renderHistory(
     return created;
   };
 
+  const accent = token("--primary", scheme === "dark" ? "#7aa7d9" : "#335f8c");
   for (const step of steps) {
     const branch = open(step.branch);
     const commitId = ids.get(step.hash) ?? "";
+    const isCurrent = current !== null && commitId === current;
+    const dot = {
+      ...(step.kind === "agent" ? { color: scheme === "dark" ? "#d6bcfa" : "#6d28d9" } : {}),
+      ...(isCurrent ? { size: 7, strokeWidth: 3, strokeColor: accent } : {}),
+    };
     const commitOptions = {
       subject: step.subject,
       hash: step.hash,
       author: step.kind,
       ...(step.tag ? { tag: step.tag } : {}),
-      ...(step.kind === "agent"
-        ? { style: { dot: { color: scheme === "dark" ? "#d6bcfa" : "#6d28d9" } } }
-        : {}),
-      renderMessage: (drawn: DrawnCommit) => commitMessage(drawn, commitId, shortHash(step.hash), onCheckout),
+      ...(Object.keys(dot).length > 0 ? { style: { dot } } : {}),
+      renderMessage: (drawn: DrawnCommit) => commitMessage(drawn, commitId, shortHash(step.hash), isCurrent, onCheckout),
     };
     const merged = step.merges.find((name) => branches.has(name));
     if (merged) branch.merge({ branch: merged, fastForward: false, commitOptions });
@@ -116,22 +123,29 @@ export function renderHistory(
 // The checkout control sits after the message and stays invisible until the
 // pointer is on that commit. Measure once the text has a width, then stop
 // writing attributes so the resize observer can settle.
-function commitMessage(commit: DrawnCommit, commitId: string, label: string, onCheckout: (id: string) => void): SVGGElement {
+function commitMessage(
+  commit: DrawnCommit,
+  commitId: string,
+  label: string,
+  current: boolean,
+  onCheckout: (id: string) => void,
+): SVGGElement {
   const row = document.createElementNS(svgNs, "g");
-  row.setAttribute("class", "commit-row");
+  row.setAttribute("class", current ? "commit-row is-current" : "commit-row");
   row.setAttribute("transform", `translate(0, ${commit.style.dot.size})`);
   row.setAttribute("data-commit", commit.hash);
 
   const hit = document.createElementNS(svgNs, "rect");
   hit.setAttribute("class", "commit-hit");
   row.appendChild(hit);
+  if (current) row.appendChild(headPill());
 
   const text = document.createElementNS(svgNs, "text");
   text.setAttribute("class", "commit-subject");
   text.setAttribute("alignment-baseline", "central");
   text.setAttribute("dominant-baseline", "central");
   text.setAttribute("fill", commit.style.message.color ?? "");
-  text.setAttribute("style", `font: ${commit.style.message.font || font}`);
+  text.setAttribute("style", `font: ${current ? currentFont : commit.style.message.font || font}`);
   text.textContent = commit.message;
   row.appendChild(text);
 
@@ -164,6 +178,23 @@ function commitMessage(commit: DrawnCommit, commitId: string, label: string, onC
   return row;
 }
 
+function headPill(): SVGGElement {
+  const pill = document.createElementNS(svgNs, "g");
+  pill.setAttribute("class", "commit-head");
+  const box = document.createElementNS(svgNs, "rect");
+  box.setAttribute("height", "18");
+  box.setAttribute("y", "-9");
+  box.setAttribute("rx", "4");
+  const caption = document.createElementNS(svgNs, "text");
+  caption.textContent = "HEAD";
+  caption.setAttribute("y", "0");
+  caption.setAttribute("text-anchor", "middle");
+  caption.setAttribute("dominant-baseline", "central");
+  caption.setAttribute("alignment-baseline", "central");
+  pill.append(box, caption);
+  return pill;
+}
+
 function placeCheckouts(svg: SVGSVGElement): void {
   const rows = svg.querySelectorAll(".commit-row");
   for (let index = 0; index < rows.length; index += 1) {
@@ -181,8 +212,20 @@ function placeCheckouts(svg: SVGSVGElement): void {
     if (!(subject instanceof SVGTextElement) || !(action instanceof SVGGElement) || !(hit instanceof SVGRectElement) || !(caption instanceof SVGTextElement) || !(button instanceof SVGRectElement)) continue;
     const labelWidth = caption.getComputedTextLength();
     if (labelWidth <= 0) continue;
+    let start = 0;
+    const head = row.querySelector(".commit-head");
+    const headBox = head?.querySelector("rect");
+    const headCaption = head?.querySelector("text");
+    if (headBox instanceof SVGRectElement && headCaption instanceof SVGTextElement) {
+      const headWidth = Math.ceil(headCaption.getComputedTextLength()) + 12;
+      if (headWidth <= 12) continue;
+      setAttr(headBox, "width", String(headWidth));
+      setAttr(headCaption, "x", String(headWidth / 2));
+      start = headWidth + 6;
+    }
+    setAttr(subject, "x", String(start));
     const buttonWidth = Math.ceil(labelWidth) + 16;
-    const x = Math.ceil(subject.getComputedTextLength()) + 10;
+    const x = start + Math.ceil(subject.getComputedTextLength()) + 10;
     const msgOffset = Math.max(0, Math.ceil(translateX(row.parentElement)));
     setAttr(action, "transform", `translate(${x}, 0)`);
     setAttr(button, "width", String(buttonWidth));

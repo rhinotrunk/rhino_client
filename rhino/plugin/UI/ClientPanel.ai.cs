@@ -190,6 +190,7 @@ public sealed class ClientPanel : Panel
             _busy = false;
             if (result.Detached is { } detached) Post(new { type = "push.detached", commit = detached });
             SendStatus(result.Message, !result.Ok && !result.Asking, false);
+            SendHead();
             return result;
         }
         catch (OperationCanceledException)
@@ -202,6 +203,7 @@ public sealed class ClientPanel : Panel
         {
             _busy = false;
             SendStatus(ex.Message, true, false);
+            SendHead();
             return SyncResult.Fail(ex.Message);
         }
     }
@@ -324,6 +326,28 @@ public sealed class ClientPanel : Panel
         {
             SendStatus(ex.Message, true, false);
         }
+
+        SendHead();
+    }
+
+    // The commit the model is on, so the history graph can mark it.
+    private void SendHead()
+    {
+        if (_closed) return;
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            if (_closed || _busy) return;
+            try
+            {
+                var target = _sync.ReadTarget();
+                var commit = _sync.ReadBaseCommit();
+                _bridge.Post(new { type = "head", repo = target.Repo, branch = target.Branch, commit });
+            }
+            catch (Exception)
+            {
+                // Never let an exception escape a UI-thread action: it aborts Rhino on macOS.
+            }
+        });
     }
 
     private void SendStatus(string message, bool error, bool busy)

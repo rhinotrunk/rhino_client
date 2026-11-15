@@ -53,6 +53,8 @@ export type HostEvent =
   | { type: 'checkout.unpushed'; commit: string; changes: number }
   // A push stopped because the model's base commit is not the branch tip. The panel offers another branch.
   | { type: 'push.detached'; commit: string }
+  // The commit the model is based on, or null before its first pull or push.
+  | { type: 'head'; repo: string; branch: string; commit: string | null }
   | { type: 'theme'; scheme: 'light' | 'dark' };
 
 export function newId(): string {

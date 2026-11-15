@@ -394,3 +394,13 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .history .commit-checkout:hover rect {
   fill: var(--accent);
 }
+
+.history .commit-head rect {
+  fill: var(--primary);
+}
+
+.history .commit-head text {
+  fill: var(--primary-foreground);
+  font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}

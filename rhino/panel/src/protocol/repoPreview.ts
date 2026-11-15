@@ -14,6 +14,7 @@ export function repoPreview(command: PanelCommand, receive: (event: HostEvent) =
       queueMicrotask(() => {
         receive({ type: 'session', server: 'http://localhost:5280/', repo: 'demo', branch: head.branch });
         receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
+        receive({ type: 'head', repo: 'demo', ...head });
       });
       return false; // the agent preview also answers 'ready'
     case 'repos':
@@ -40,6 +41,7 @@ export function repoPreview(command: PanelCommand, receive: (event: HostEvent) =
         const first = command.unpushed === 'push' ? `push ${command.repo} ${command.branch}, then ` : 'discard, then ';
         head = { branch: command.branch, commit: command.commit };
         receive({ type: 'status', message: `Preview ${first}checkout ${short}`, error: false, busy: false });
+        receive({ type: 'head', repo: command.repo, ...head });
       });
       return true;
     }
@@ -48,12 +50,14 @@ export function repoPreview(command: PanelCommand, receive: (event: HostEvent) =
         if (pushStops(command.branch, receive, '')) return;
         head = { ...head, branch: command.branch };
         receive({ type: 'status', message: `Preview push ${command.repo} ${command.branch}`, error: false, busy: false });
+        receive({ type: 'head', repo: command.repo, ...head });
       });
       return true;
     case 'pull':
       queueMicrotask(() => {
         head = { branch: command.branch, commit: tipOf(command.branch) };
         receive({ type: 'status', message: `Preview pull ${command.repo} ${command.branch}`, error: false, busy: false });
+        receive({ type: 'head', repo: command.repo, ...head });
       });
       return true;
     default:

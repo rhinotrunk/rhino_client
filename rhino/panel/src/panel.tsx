@@ -50,6 +50,7 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   const [unpushed, setUnpushed] = useState<{ commit: string; changes: number } | null>(null);
   const [detached, setDetached] = useState<{ commit: string } | null>(null);
   const [newBranch, setNewBranch] = useState("");
+  const [head, setHead] = useState<{ repo: string; branch: string; commit: string | null } | null>(null);
   const branchRef = useRef(branch);
   branchRef.current = branch;
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
@@ -61,6 +62,9 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   const detachedId = useId();
   const newBranchId = useId();
   const disabled = !ready || busy;
+  const current = head && head.repo === history.repo ? head.commit : null;
+  const currentCommit = current ? history.commits.find((commit) => commit.id === current) : undefined;
+  const atTip = !!head && !!currentCommit?.refs.includes(head.branch);
 
   useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", scheme === "dark");
@@ -109,6 +113,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
       } else if (event.type === "push.detached") {
         setDetached({ commit: event.commit });
         setNewBranch(`${branchRef.current.trim() || "branch"}-${shortHash(event.commit)}`);
+      } else if (event.type === "head") {
+        setHead({ repo: event.repo, branch: event.branch, commit: event.commit });
       }
     });
   }, [bridge, connected]);
@@ -136,8 +142,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   useEffect(() => {
     const host = hostRef.current;
     if (!host || history.commits.length === 0) return;
-    renderHistory(host, history.commits, scheme, (id) => checkoutRef.current(id));
-  }, [history.commits, scheme]);
+    renderHistory(host, history.commits, scheme, current, (id) => checkoutRef.current(id));
+  }, [history.commits, scheme, current]);
 
   useEffect(() => {
     hostRef.current?.classList.toggle("is-busy", disabled);
@@ -369,9 +375,22 @@ export function Panel({ bridge }: { bridge: Bridge }) {
         <CardContent className="border-t p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-sm font-medium">History</h2>
-            {history.truncated && history.loaded && history.commits.length > 0 ? (
-              <Badge variant="outline" className="font-normal">Truncated</Badge>
-            ) : null}
+            <div className="flex min-w-0 items-center gap-1">
+              {currentCommit && head ? (
+                <Badge
+                  variant="outline"
+                  className="truncate font-mono font-normal"
+                  title={atTip
+                    ? `The model is at the tip of ${head.branch}.`
+                    : `The model is at ${shortHash(currentCommit.id)}, not the tip of ${head.branch}. A push goes to another branch.`}
+                >
+                  HEAD {shortHash(currentCommit.id)}{atTip ? ` → ${head.branch}` : " · detached"}
+                </Badge>
+              ) : null}
+              {history.truncated && history.loaded && history.commits.length > 0 ? (
+                <Badge variant="outline" className="font-normal">Truncated</Badge>
+              ) : null}
+            </div>
           </div>
           {note ? (
             <p className={cn("text-sm wrap-anywhere", history.error ? "text-destructive" : "text-muted-foreground")}>{note}</p>
