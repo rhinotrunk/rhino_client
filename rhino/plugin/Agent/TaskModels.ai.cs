@@ -23,6 +23,11 @@ internal sealed class TaskEntry
     public string? InputPath { get; set; }
     public string? WorkingPath { get; set; }
     public string? ResultPath { get; set; }
+    /// <summary>Commit the task's input snapshot was taken at; null when the model was not synced with a repository.</summary>
+    public string? BaseCommit { get; set; }
+    public bool Merging { get; set; }
+    public string? MergedBranch { get; set; }
+    public DateTimeOffset? MergedAt { get; set; }
     public string? SessionId { get; set; }
     public string? WorkerThreadId { get; set; }
     public string? Model { get; set; }

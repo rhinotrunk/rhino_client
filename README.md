@@ -10,7 +10,7 @@ Enter a server, repository, and branch, then pull or push. Pull checks the branc
 
 Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
 
-Creating a git branch and pull request for each proposed result, and merging it on approval, is being integrated on `feature/MCP-merging`. Until then, “PR ready” currently means a saved local task result, available through **Inspect document copy**. The source model is not changed by task workers.
+“Ready to merge” means a saved local task result you can preview in the viewport. **Merge**, next to a finished task's “…” menu, uses the same sync pipeline as Push and Pull: it commits the result to its own `agent/…` branch (authored as an agent, branched from the commit the task started at), merges that branch into the model's branch, and pulls the merged result into the open model. The model must already be on a repository branch (push it from the Repository tab first), and it must have no unpushed changes, because the final pull makes the model match the merged commit: existing objects are updated in place and objects the commit no longer lists are removed (one undo step). If the merge conflicts, the task branch is kept for review. Opening a pull request and approval rules are not part of this yet. The source model is not changed by task workers.
 
 ## Try a session
 
@@ -24,7 +24,7 @@ Both orchestration and workers default to **GPT-6 Luna, low reasoning effort**. 
 
 Current geometry tools cover context/object inspection, polyline/box/sphere creation, move/rotate/scale/copy, and deletion. Object/layer scope is optional; an empty scope allows edits throughout the isolated copy. Arbitrary scripts and commands are not exposed.
 
-Worker turns stop after 512 tool calls, five consecutive tool errors, three minutes without CLI output, or 15 minutes overall. Failures retain the saved task copy and explain the reason in Records. Review and clarify or split the task before resuming; a resumed turn gets a fresh limit. Ambiguous grid dimensions and bay counts should be clarified before planning geometry.
+Worker turns stop after 512 tool calls, five consecutive tool errors, three minutes without CLI output, or 15 minutes overall. Failures retain the saved task copy and explain the reason in Records. Review and clarify or split the task before resuming; a resumed turn gets a fresh limit. The orchestrator proposes tasks right away and states any assumed dimensions, spacing or bay counts in the task instructions; it asks at most a couple of short questions, and only when it cannot plan without the answer. Review the assumptions before running.
 
 Browser preview simulates agents and geometry and labels itself accordingly. The actual CLI/MCP transport has been tested with the budget model, including conversation continuation; full native geometry execution still needs verification inside Rhino.
 

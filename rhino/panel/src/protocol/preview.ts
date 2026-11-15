@@ -71,6 +71,13 @@ export function createPreview(emit: (e: HostEvent) => void) {
     switch (cmd.type) {
       case 'ready': publish(); return;
       case 'preview.clear': state.previewTaskId = null; publish(); return;
+      case 'task.merge':
+        if (task?.status === 'ready' && !task.mergedBranch) {
+          task.mergedBranch = `agent/${task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${task.id.slice(0, 8)}-r${task.revision}`;
+          task.mergedAt = new Date().toISOString();
+          task.activity.push(entry('status', 'Preview: merged into the model via ' + task.mergedBranch + '.'));
+        }
+        publish(); return;
       case 'task.show': state.previewTaskId = task?.resultPath ? task.id : null; publish(); return;
       case 'panel.error': console.error(cmd.message); return;
       case 'scope.selection': emit({ type: 'scope.selection', objectIds: ['preview-object-1', 'preview-object-2'] }); return;

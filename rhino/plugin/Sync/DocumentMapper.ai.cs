@@ -133,7 +133,13 @@ internal static class DocumentMapper
         if (layers < 1) throw new SyncException("The commit has no layers.");
     }
 
-    internal static Dictionary<string, uint> Apply(RhinoDoc doc, IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs)
+    /// <summary>
+    /// Applies a commit to the document. Objects that already exist are updated in place (same id) and new ones
+    /// are added. With <paramref name="removeUnlisted"/> the document is made to match the commit: model objects
+    /// the commit does not list are deleted. Only pass it when the document has no unpushed edits.
+    /// </summary>
+    internal static Dictionary<string, uint> Apply(
+        RhinoDoc doc, IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs, bool removeUnlisted = false)
     {
         //if (ModelObjectCount(doc) > 0)
         //    throw new SyncException("Pull replaces the document and only runs when it has no model objects.");
@@ -155,7 +161,7 @@ internal static class DocumentMapper
                 decoded.Add(new DecodedObject(entity, attributes, DecodeGeometry(entity, blobs)));
             }
 
-            return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, decoded);
+            return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, decoded, removeUnlisted);
         }
         finally
         {
@@ -168,7 +174,8 @@ internal static class DocumentMapper
         JsonObject settingsAttributes,
         IReadOnlyList<EntityVersion> layers,
         Dictionary<string, JsonObject> layerAttributes,
-        List<DecodedObject> objects)
+        List<DecodedObject> objects,
+        bool removeUnlisted)
     {
         var redraw = doc.Views.RedrawEnabled;
         doc.Views.RedrawEnabled = false;
@@ -186,6 +193,15 @@ internal static class DocumentMapper
 
             EnsureCurrent(doc, keep);
             DeleteExtraLayers(doc, keep);
+            if (removeUnlisted)
+            {
+                var listed = new HashSet<Guid>(objects.Select(item => ParseGuid(item.Entity.Id, "object")));
+                var extras = doc.Objects.GetObjectList(ModelSettings())
+                    .Where(obj => obj.Attributes.Space == ActiveSpace.ModelSpace && !ShouldSkip(obj) && !listed.Contains(obj.Id))
+                    .ToList();
+                foreach (var extra in extras) doc.Objects.Delete(extra, true);
+            }
+
             var serials = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var item in objects)
                 serials[item.Entity.Id] = AddObject(doc, item);
@@ -471,6 +487,17 @@ internal static class DocumentMapper
         };
         if (string.IsNullOrEmpty(attributes.Name)) attributes.Name = null;
         WriteUserText((key, value) => attributes.SetUserString(key, value), null, ReadObject(item.Attributes, "userText"));
+
+        // An object that is already in the document keeps its id: update it instead of adding a second one.
+        if (doc.Objects.FindId(id) is { } present)
+        {
+            if (!doc.Objects.Replace(present.Id, item.Geometry, true))
+                throw new SyncException($"Rhino could not update object {item.Entity.Id}.");
+            var updated = doc.Objects.FindId(id) ?? throw new SyncException($"Object {item.Entity.Id} was lost while updating.");
+            if (!doc.Objects.ModifyAttributes(updated, attributes, true))
+                updated = doc.Objects.FindId(id) ?? updated;
+            return updated.RuntimeSerialNumber;
+        }
 
         var added = doc.Objects.Add(item.Geometry, attributes);
         if (added != id) throw new SyncException($"Rhino did not keep the id for object {item.Entity.Id}.");

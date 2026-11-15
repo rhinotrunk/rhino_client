@@ -85,6 +85,9 @@ public sealed class ClientPanel : Panel
                         new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
                         Text(command, "message"));
                     break;
+                case "task.merge":
+                    MergeTask(Text(command, "id"));
+                    break;
                 default:
                     await _control.Command(command);
                     break;
@@ -104,11 +107,47 @@ public sealed class ClientPanel : Panel
     internal Task<IReadOnlyList<CommitChoice>> ListCommits(SyncTarget target) =>
         _sync.ListCommitsAsync(target, _unload.Token);
 
-    internal Task<SyncResult> Pull(SyncTarget target) => RunAsync(true, target, "");
+    internal Task<SyncResult> Pull(SyncTarget target) => RunAsync("Pulling…", () => _sync.PullAsync(target, _unload.Token));
 
-    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync(false, target, message);
+    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync("Pushing…", () => _sync.PushAsync(target, message, _unload.Token));
 
-    private async Task<SyncResult> RunAsync(bool pull, SyncTarget target, string message)
+    // One-click merge of a finished agent task: same sync pipeline as Push and Pull, so it shares their busy state.
+    private async void MergeTask(string id)
+    {
+        if (!_control.TryBeginMerge(id, out var request, out var problem))
+        {
+            _bridge.Post(new { type = "control.error", message = problem });
+            return;
+        }
+
+        var branch = TaskBranch.Name(request);
+        SyncResult result;
+        try
+        {
+            var target = _sync.ReadTarget();
+            result = await RunAsync($"Merging {request.Title}…", () => _sync.MergeTaskAsync(target, request, _unload.Token));
+        }
+        catch (Exception ex)
+        {
+            result = SyncResult.Fail(ex.Message);
+        }
+
+        RhinoApp.InvokeOnUiThread(() =>
+        {
+            try
+            {
+                _control.FinishMerge(id, result.Ok, result.Message, branch);
+                if (!result.Ok) _bridge.Post(new { type = "control.error", message = result.Message });
+            }
+            catch (Exception ex)
+            {
+                // Never let an exception escape a UI-thread action: it aborts Rhino on macOS.
+                RhinoApp.WriteLine("RhinoClient: could not record the merge result (" + ex.Message + ").");
+            }
+        });
+    }
+
+    private async Task<SyncResult> RunAsync(string busyMessage, Func<Task<SyncResult>> work)
     {
         if (_closed) return SyncResult.Fail("The panel has closed.");
         if (_busy)
@@ -119,13 +158,11 @@ public sealed class ClientPanel : Panel
         }
 
         _busy = true;
-        _busyMessage = pull ? "Pulling…" : "Pushing…";
+        _busyMessage = busyMessage;
         SendStatus(_busyMessage, false, true);
         try
         {
-            var result = pull
-                ? await _sync.PullAsync(target, _unload.Token)
-                : await _sync.PushAsync(target, message, _unload.Token);
+            var result = await work();
             _busy = false;
             SendStatus(result.Message, !result.Ok, false);
             return result;

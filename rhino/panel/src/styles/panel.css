@@ -347,4 +347,11 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .plan-task-title span { display: block; font-size: 12px; }
 .session-plan-row { padding: 6px 10px; overflow: visible; }
 .session-return { text-align: left; color: var(--blue); }
+/* One-click merge for finished tasks, and a highlight that spans the row's "..." menu. */
+.merge-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 26px; height: 26px; margin-right: 2px; border-radius: 4px; color: var(--blue); border: 1px solid var(--blue); }
+.merge-button:hover:not(:disabled) { background: var(--blue); color: var(--panel); }
+.merged-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-right: 6px; font-size: 11px; color: var(--good); }
+.session-nav-line { border-radius: 5px; }
+.session-nav-line.selected { background: var(--selected); color: var(--blue); }
+.session-nav-line .session-nav { background: transparent; }
 }

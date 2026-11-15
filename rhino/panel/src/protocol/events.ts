@@ -11,6 +11,7 @@ export type AgentTask = {
   archived?: boolean; deleted?: boolean; paused?: boolean; scope: Scope; activity: Activity[]; error?: string | null; revision: number;
   inputTokens: number; outputTokens: number; startedAt?: string | null; finishedAt?: string | null;
   resultPath?: string | null; workingPath?: string | null; inputPath?: string | null;
+  baseCommit?: string | null; merging?: boolean; mergedBranch?: string | null; mergedAt?: string | null;
 };
 export type Settings = { codexPath: string; model: string; concurrency: number };
 export type ModelingSession = {
@@ -31,7 +32,7 @@ export type PanelCommand =
   | { type: 'tasks.launch'; sessionId: string }
   | { type: 'task.add'; sessionId: string; id?: string; launch?: boolean; branchFromResult?: boolean; title: string; instructions: string; parentId?: string; scope: Scope }
   | { type: 'task.update'; id: string; title: string; instructions: string; scope: Scope }
-  | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show'; id: string }
+  | { type: 'task.pause' | 'task.resume' | 'task.archive' | 'task.restore' | 'task.remove' | 'task.launch' | 'task.stop' | 'task.preview' | 'task.show' | 'task.merge'; id: string }
   | { type: 'task.message'; id: string; message: string }
   | { type: 'commits'; server: string; repo: string; branch: string }
   | { type: 'pull'; server: string; repo: string; branch: string; commit: string }

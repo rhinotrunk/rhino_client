@@ -69,6 +69,7 @@ internal sealed class TaskControl : IDisposable
         { State = new() { CodexPath = CodexRunner.FindExecutable() }; RhinoApp.WriteLine("RhinoClient: could not restore task history: " + ex.Message); }
         if (State.Model is not ("gpt-6-luna" or "gpt-6.1-terra")) State.Model = ControlState.BudgetModel;
         foreach (var session in State.Sessions) session.IsPlanning = false;
+        foreach (var task in State.Tasks) task.Merging = false;
         foreach (var task in State.Tasks)
             if (task.Status is "running" or "stopping" or "queued")
             { task.Status = "interrupted"; task.Activity.Add(new("status", "Rhino restarted. Inspect the saved copy before continuing; no geometry operations were replayed.", DateTimeOffset.UtcNow)); }
@@ -101,6 +102,12 @@ internal sealed class TaskControl : IDisposable
     }
     private SessionEntry Session(string id) => State.Sessions.FirstOrDefault(s => s.Id == id) ?? throw new InvalidOperationException("Session not found.");
     private TaskEntry Find(string id) => State.Tasks.FirstOrDefault(x => x.Id == id) ?? throw new InvalidOperationException("Task not found.");
+    // The commit the open model was last pushed to or pulled from; tasks remember it so a result can be merged later.
+    private string? SourceBaseCommit()
+    {
+        var value = Source.Strings.GetValue(RhinoClient.Sync.WorkingCopy.BaseKey);
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
     private static GeometryScope ScopeCopy(GeometryScope scope) => new() { WholeDocument = scope.WholeDocument, ObjectIds = [.. scope.ObjectIds], LayerIds = [.. scope.LayerIds] };
     private GeometryScope ReadScope(JsonElement cmd)
     {
@@ -112,6 +119,35 @@ internal sealed class TaskControl : IDisposable
     {
         using var options = new FileWriteOptions { SuppressDialogBoxes = true, SuppressAllInput = true, UpdateDocumentPath = false, WriteSelectedObjectsOnly = false };
         if (!doc.Write3dmFile(path, options)) throw new IOException("Could not save the document copy.");
+    }
+
+    /// <summary>Checks a task can be merged and marks it as merging. Call on the UI thread.</summary>
+    public bool TryBeginMerge(string id, out RhinoClient.Sync.TaskMergeRequest request, out string problem)
+    {
+        request = null!;
+        var task = State.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) problem = "Task not found.";
+        else if (task.Merging) problem = "This task is already being merged.";
+        else if (task.MergedBranch is not null) problem = $"This task was already merged via {task.MergedBranch}.";
+        else if (task.Status != "ready" || task.ResultPath is null || !File.Exists(task.ResultPath)) problem = "Only a finished task with a saved result can be merged.";
+        else if (task.BaseCommit is null) problem = "This task started from a model that was not on a repository branch. Push the model from the Repository tab, then run the task again.";
+        else
+        {
+            task.Merging = true; Publish();
+            request = new(task.Id, task.Title, task.Revision, task.ResultPath, task.BaseCommit);
+            problem = "";
+            return true;
+        }
+        return false;
+    }
+    /// <summary>Records the outcome of a merge. Call on the UI thread.</summary>
+    public void FinishMerge(string id, bool ok, string message, string branch)
+    {
+        var task = State.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) return;
+        task.Merging = false;
+        if (ok && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase)) { task.MergedBranch = branch; task.MergedAt = DateTimeOffset.UtcNow; }
+        Log(task, ok ? "status" : "error", message);
     }
 
     public async Task Command(JsonElement cmd)
@@ -207,6 +243,7 @@ internal sealed class TaskControl : IDisposable
                     var origin = Find(parent);
                     if (origin.Status != "ready" || origin.ResultPath is null) throw new InvalidOperationException("Branching requires a completed task result.");
                     added.InputPath = origin.ResultPath;
+                    added.BaseCommit = origin.BaseCommit;
                 }
                 if (State.Tasks.Any(t => t.Id == added.Id)) throw new InvalidOperationException("Task already exists.");
                 State.Tasks.Add(added); Publish();
@@ -228,7 +265,8 @@ internal sealed class TaskControl : IDisposable
                 foreach (var task in pending) { if (string.IsNullOrWhiteSpace(task.Instructions)) throw new InvalidOperationException("Each task needs instructions."); }
                 string? snapshot = null;
                 if (pending.Any(x => x.ParentId is null)) { snapshot = Path.Combine(_directory, $"main-{Guid.NewGuid():N}.3dm"); WriteCopy(Source, snapshot); }
-                foreach (var task in pending) { if (task.ParentId is null) task.InputPath = snapshot; Queue(task); }
+                var snapshotBase = snapshot is null ? null : SourceBaseCommit();
+                foreach (var task in pending) { if (task.ParentId is null) { task.InputPath = snapshot; task.BaseCommit = snapshotBase; } Queue(task); }
                 Pump(); break;
             case "task.stop":
                 Stop(Find(id)); Pump(); break;
@@ -290,6 +328,7 @@ internal sealed class TaskControl : IDisposable
             var snapshot = Path.Combine(_directory, $"main-{Guid.NewGuid():N}.3dm");
             WriteCopy(Source, snapshot);
             task.InputPath = snapshot;
+            task.BaseCommit = SourceBaseCommit();
         }
         task.Status = "queued";
         Log(task, "status", task.ParentId is null ? "Queued from a snapshot of the current model." : "Queued. Waiting for the upstream result if needed.");
@@ -306,6 +345,7 @@ internal sealed class TaskControl : IDisposable
                 var upstream = Find(task.ParentId);
                 if (upstream.Paused || upstream.Archived || upstream.Deleted || upstream.Status != "ready" || upstream.ResultPath is null) continue;
                 task.InputPath = upstream.ResultPath;
+                task.BaseCommit = upstream.BaseCommit;
             }
             task.Status = "running"; task.Error = null; task.StartedAt = DateTimeOffset.UtcNow; task.FinishedAt = null;
             task.Cancellation = new(); slots--;
@@ -344,7 +384,7 @@ internal sealed class TaskControl : IDisposable
             if (parent.Length > 0 && !keys.ContainsKey(parent)) throw new InvalidOperationException("Parents must precede children; cycles are not allowed.");
             var task = new TaskEntry { SessionId = session.Id, Title = AgentJson.Text(item, "title"), Instructions = AgentJson.Text(item, "instructions"), ParentId = parent.Length > 0 ? keys[parent] : null, Scope = ScopeCopy(session.Scope) };
             if (string.IsNullOrWhiteSpace(task.Title) || string.IsNullOrWhiteSpace(task.Instructions)) throw new InvalidOperationException("Every task needs a title and instructions.");
-            if (task.ParentId is not null && State.Tasks.FirstOrDefault(t => t.Id == task.ParentId) is { Status: "ready" } upstream) task.InputPath = upstream.ResultPath;
+            if (task.ParentId is not null && State.Tasks.FirstOrDefault(t => t.Id == task.ParentId) is { Status: "ready" } upstream) { task.InputPath = upstream.ResultPath; task.BaseCommit = upstream.BaseCommit; }
             keys.Add(key, task.Id); tasks.Add(task);
         }
         State.Tasks.AddRange(tasks); Publish();
@@ -362,7 +402,7 @@ internal sealed class TaskControl : IDisposable
             }, (k, t) => Log(planner, k, t), () => { }, planner.Cancellation!.Token);
             var existing = State.Tasks.Where(t => t.SessionId == session.Id && !t.Deleted && !t.Archived).Select(t => new { t.Id, t.Title, t.Status, t.ParentId, t.Paused, summary = t.Activity.LastOrDefault(a => a.Kind == "assistant")?.Text });
             var prompt = "You coordinate a Rhino modeling session. Planning is the beginning of this session, not a separate user workflow. Inspect model context before planning. For an initial request, call propose_plan once with the smallest useful set of concrete tasks: a simple request needs only one task. Shared prerequisites are parents. Every requested design option MUST be its own sibling task and its own document copy. Never bundle several options in a task such as Develop-three-versions. A grid plus three facade options requires four tasks: one grid parent and three facade children. Do not execute geometry. For follow-up discussion, answer questions or propose additional tasks only when requested. Existing task IDs may be used as parentKey. Do not duplicate existing tasks. The human must launch reviewed tasks; acceptance is deferred. Available worker operations: polyline/box/sphere creation, move, rotate, scale, copy, delete. No scripts or arbitrary commands.\nExisting tasks: " + JsonSerializer.Serialize(existing, AgentJson.Options) + "\nUser: " + request;
-            prompt += $"\nClarify ambiguous dimensions, spacing and bay counts in chat before proposing tasks. A count of units or bays is not a spacing in document units. Never turn an ambiguous count into thousands of objects. Include explicit dimensions, spacing and estimated object count in geometry task instructions. Each worker turn permits at most {WorkerBudget.MaxToolCalls} tool calls; split larger work only when its scale is explicit.";
+            prompt += $"\nPropose tasks first. Default to calling propose_plan right away on the initial request; do not open with questions. Where the request leaves details open (dimensions, spacing, bay counts), choose sensible, modest values, write them into the task instructions as explicit assumptions, and mention them briefly in your summary so the user can correct them. Ask a question only when you genuinely cannot make a reasonable plan without the answer, and then ask at most one or two short questions in a single message. A count of units or bays is not a spacing in document units; never turn an ambiguous count into thousands of objects. Include explicit dimensions, spacing and estimated object count in geometry task instructions. Each worker turn permits at most {WorkerBudget.MaxToolCalls} tool calls; split larger work only when its scale is explicit.";
             await CodexRunner.Run(planner, State, _directory, mcp.Url, prompt, line => ParseEvent(planner, line), p => planner.Process = p, planner.Cancellation.Token);
         }
         catch (OperationCanceledException) { await RhinoThread.Run(() => { Log(planner, "status", "Session planning stopped."); return true; }); }
@@ -412,7 +452,7 @@ internal sealed class TaskControl : IDisposable
                 File.Copy(task.WorkingPath!, result);
                 task.ResultPath = result; task.Status = "ready";
                 if (_previewTaskId == task.Id) _preview.Show(task.Document!, true);
-                Log(task, "status", "PR ready (local proposal). Acceptance and Git integration are deferred.");
+                Log(task, "status", "Ready to merge. Use Merge to commit this result to its own branch, merge it into the model's branch, and pull it into the model.");
                 return true;
             });
         }

@@ -5,5 +5,6 @@
     <Compile Include="../../rhino/plugin/Agent/WorkerBudget.ai.cs" Link="WorkerBudget.ai.cs" />
     <Compile Include="../../rhino/plugin/Agent/CodexRunner.ai.cs" Link="CodexRunner.ai.cs" />
     <Compile Include="../../rhino/plugin/UI/PanelBridge.ai.cs" Link="PanelBridge.ai.cs" />
+    <Compile Include="../../rhino/plugin/Sync/TaskMerge.ai.cs" Link="TaskMerge.ai.cs" />
   </ItemGroup>
 </Project>

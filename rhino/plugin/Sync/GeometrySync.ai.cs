@@ -54,6 +54,14 @@ public sealed class GeometrySync : IDisposable
     public Task<SyncResult> PullAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
         Run(() => PullCore(target, cancellationToken), cancellationToken);
 
+    /// <summary>
+    /// Merges a finished agent task into the document's branch with the same pieces as push and pull:
+    /// the task's result is committed to its own branch (as an agent), that branch is merged into the target
+    /// branch, and the result is pulled into the document. Refuses when the document has unpushed changes.
+    /// </summary>
+    public Task<SyncResult> MergeTaskAsync(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken = default) =>
+        Run(() => MergeTaskCore(target, task, cancellationToken), cancellationToken);
+
     /// <summary>Recent commits on the branch, newest first. Does not run a pull.</summary>
     public Task<IReadOnlyList<CommitChoice>> ListCommitsAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
         Task.Run(() => ListCommitsCore(target, cancellationToken), cancellationToken);
@@ -149,7 +157,104 @@ public sealed class GeometrySync : IDisposable
             $"Pushed {captured.Changes.Count} changes to {bound.Branch} ({response.Commit}).", captured.Skipped), warning));
     }
 
-    private async Task<SyncResult> PullCore(SyncTarget target, CancellationToken cancellationToken)
+    private async Task<SyncResult> MergeTaskCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
+    {
+        var bound = Normalize(target);
+        if (!File.Exists(task.ResultPath))
+            return SyncResult.Fail("The task's saved result is missing, so it cannot be merged.");
+        OnUi(() =>
+        {
+            _copy.Read();
+            _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
+        });
+        if (_copy.BaseCommit is null)
+            return SyncResult.Fail($"This model is not on '{bound.Branch}' yet. Push it from the Repository tab first, then run the task so it starts from a known commit.");
+
+        var client = ClientFor(bound.Server);
+        await RequireRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false)
+            ?? throw new SyncException($"Branch '{bound.Branch}' does not exist.");
+        await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        if (_copy.HasUnsupported)
+            return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
+
+        // Pulling the merged result replaces model content, so never run it over unpushed edits.
+        var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
+        if (local.Changes.Count > 0)
+            return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
+
+        var branch = TaskBranch.Name(task);
+        var existing = await client.GetBranchAsync(bound.Repo, branch, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.Commit == task.BaseCommit)
+        {
+            // Diff the result against the commit the task started from, not the model's current base, so
+            // work pushed since the snapshot is not mistaken for deletions by the task.
+            var listing = await client.ListEntitiesAsync(
+                bound.Repo, task.BaseCommit, doc: Names.DefaultDoc, includeManifests: true, ct: cancellationToken).ConfigureAwait(false);
+            var taskBase = new WorkingCopy(0);
+            taskBase.Adopt(listing);
+            if (taskBase.HasUnsupported)
+                return SyncResult.Fail("The task's base commit contains entities this client cannot update yet: " + taskBase.UnsupportedSummary + ".");
+            var captured = OnUi(() => CaptureResult(task.ResultPath, taskBase));
+            if (captured.Changes.Count == 0)
+                return SyncResult.Success(WithSkips($"'{task.Title}' made no changes, so there is nothing to merge.", captured.Skipped));
+
+            var author = new AuthorInfo { Id = "agent-" + task.TaskId[..Math.Min(8, task.TaskId.Length)], Name = "Agent: " + task.Title, Kind = AuthorKinds.Agent };
+            if (existing is null)
+            {
+                await client.CreateBranchAsync(bound.Repo, new CreateBranchRequest
+                {
+                    Name = branch,
+                    From = task.BaseCommit,
+                    Parent = bound.Branch,
+                    Author = author,
+                }, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (captured.Blobs.Count > 0)
+                await client.UploadAsync(bound.Repo, captured.Blobs.Values.ToList(), cancellationToken).ConfigureAwait(false);
+            await client.CommitAsync(bound.Repo, new CommitRequest
+            {
+                Branch = branch,
+                ExpectedHead = task.BaseCommit,
+                Message = "Agent task: " + task.Title,
+                Author = author,
+                Changes = captured.Changes,
+                Meta = new Dictionary<string, string> { ["task"] = task.TaskId, ["revision"] = task.Revision.ToString() },
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        MergeResponse merged;
+        try
+        {
+            merged = await client.MergeAsync(bound.Repo, new MergeRequest
+            {
+                Branch = bound.Branch,
+                ExpectedHead = remote.Commit,
+                Theirs = branch,
+                Message = "Merge agent task: " + task.Title,
+                Author = Author(),
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RhinoTrunkApiException ex)
+        {
+            return SyncResult.Fail($"Branch '{branch}' holds the task's result but could not be merged into '{bound.Branch}'. {Format(ex)} The branch is kept for review.");
+        }
+
+        // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
+        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), cancellationToken, matchCommit: true).ConfigureAwait(false);
+        return pulled.Ok
+            ? SyncResult.Success($"Merged '{task.Title}' into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
+            : SyncResult.Fail($"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+    }
+
+    private static CapturedPush CaptureResult(string path, WorkingCopy taskBase)
+    {
+        using var doc = RhinoDoc.OpenHeadless(path) ?? throw new SyncException("Rhino could not open the task's saved result.");
+        return DocumentMapper.Capture(doc, taskBase);
+    }
+
+    private async Task<SyncResult> PullCore(SyncTarget target, CancellationToken cancellationToken, bool matchCommit = false)
     {
         var bound = Normalize(target);
         OnUi(() =>
@@ -175,7 +280,7 @@ public sealed class GeometrySync : IDisposable
         var objectCount = entities.Count(entity => entity.Kind == EntityKinds.Object);
         var warning = OnUi(() =>
         {
-            var serials = DocumentMapper.Apply(_copy.Require(), entities, blobs);
+            var serials = DocumentMapper.Apply(_copy.Require(), entities, blobs, matchCommit);
             var entries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
             foreach (var entity in entities)
                 entries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
@@ -476,7 +581,17 @@ public sealed class GeometrySync : IDisposable
     {
         if (!RhinoApp.InvokeRequired) return action();
         var app = Eto.Forms.Application.Instance ?? throw new SyncException("Rhino's UI is not running.");
-        return app.Invoke(action);
+        // An exception that escapes an action on Rhino's UI thread aborts Rhino on macOS, so catch it there
+        // and rethrow it on the calling thread.
+        T result = default!;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        app.Invoke(() =>
+        {
+            try { result = action(); }
+            catch (Exception ex) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex); }
+        });
+        failure?.Throw();
+        return result;
     }
 
     private static void OnUi(Action action) => OnUi(() =>
