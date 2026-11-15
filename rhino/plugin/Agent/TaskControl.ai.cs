@@ -146,6 +146,8 @@ internal sealed class TaskControl : IDisposable
         var task = State.Tasks.FirstOrDefault(t => t.Id == id);
         if (task is null) return;
         task.Merging = false;
+        if (ok && task.MergedBranch is null && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase) && _previewTaskId == id)
+        { _preview.Clear(); _previewTaskId = null; }
         if (ok && !message.Contains("nothing to merge", StringComparison.OrdinalIgnoreCase)) { task.MergedBranch = branch; task.MergedAt = DateTimeOffset.UtcNow; }
         Log(task, ok ? "status" : "error", message);
     }
@@ -307,6 +309,8 @@ internal sealed class TaskControl : IDisposable
     }
     private void ShowTask(TaskEntry task)
     {
+        // A merged result is real model geometry now, so show the model itself instead of a preview overlay.
+        if (task.MergedBranch is not null) { _preview.Clear(); _previewTaskId = null; return; }
         if (task.Document is not null) _preview.Show(task.Document, true, task.InputPath);
         else
         {

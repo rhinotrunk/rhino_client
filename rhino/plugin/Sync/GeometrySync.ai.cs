@@ -236,6 +236,9 @@ public sealed class GeometrySync : IDisposable
                 Theirs = branch,
                 Message = "Merge agent task: " + task.Title,
                 Author = Author(),
+                // Always record a merge commit, even when the branch could fast-forward, so history shows the
+                // task splitting off the branch as one commit and joining back in.
+                NoFastForward = true,
             }, cancellationToken).ConfigureAwait(false);
         }
         catch (RhinoTrunkApiException ex)

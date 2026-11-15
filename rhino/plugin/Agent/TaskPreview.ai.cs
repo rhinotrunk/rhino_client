@@ -18,9 +18,6 @@ internal sealed class TaskPreview(uint sourceSerial) : DisplayConduit, IDisposab
     private static readonly Color Green = Color.FromArgb(60, 200, 110);
     private static readonly Color Amber = Color.FromArgb(240, 170, 50);
     private static readonly Color Red = Color.FromArgb(230, 70, 70);
-    private static readonly DisplayMaterial GreenFill = new(Green, 0.65);
-    private static readonly DisplayMaterial AmberFill = new(Amber, 0.65);
-    private static readonly DisplayMaterial RedFill = new(Red, 0.65);
 
     private readonly List<Item> _items = [];
     private BoundingBox _bounds = BoundingBox.Empty;
@@ -112,7 +109,7 @@ internal sealed class TaskPreview(uint sourceSerial) : DisplayConduit, IDisposab
         if (!ForSource(e)) return;
         foreach (var item in _items) Draw(e.Display, item);
         if (!_compared) return;
-        var y = 14;
+        var y = 48; // below the viewport title tab
         foreach (var (label, color) in new[] { ("Added", Green), ("Changed", Amber), ("Removed", Red), ("Unchanged", Grey) })
         {
             e.Display.Draw2dText(label, color, new Point2d(14, y), false, 14);
@@ -130,19 +127,12 @@ internal sealed class TaskPreview(uint sourceSerial) : DisplayConduit, IDisposab
             _ => Grey,
         };
         var emphasised = _compared && item.Change != Change.Unchanged;
-        var fill = item.Change switch { Change.Added => GreenFill, Change.Changed => AmberFill, Change.Removed => RedFill, _ => null };
-        var weight = emphasised ? 2 : 1;
+        var weight = emphasised ? 3 : 1;
         switch (item.Geometry)
         {
             case Curve curve: display.DrawCurve(curve, color, emphasised ? 3 : 2); break;
-            case Brep brep:
-                if (emphasised && fill is not null) display.DrawBrepShaded(brep, fill);
-                display.DrawBrepWires(brep, color, weight);
-                break;
-            case Mesh mesh:
-                if (emphasised && fill is not null) display.DrawMeshShaded(mesh, fill);
-                display.DrawMeshWires(mesh, color);
-                break;
+            case Brep brep: display.DrawBrepWires(brep, color, weight); break;
+            case Mesh mesh: display.DrawMeshWires(mesh, color); break;
             case Rhino.Geometry.Point point: display.DrawPoint(point.Location, color); break;
             default: display.DrawBox(item.Geometry.GetBoundingBox(true), color); break;
         }
