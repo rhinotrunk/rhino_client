@@ -26,7 +26,8 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [selected, setSelected] = useState('sessions');
   const [tab, setTab] = useState<'conversation' | 'activity' | 'scope'>('conversation');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [collapsedPlans, setCollapsedPlans] = useState<Set<string>>(new Set());
+  // Task lists start collapsed; this holds the sessions whose list the user opened.
+  const [openPlans, setOpenPlans] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [error, setError] = useState('');
@@ -121,10 +122,10 @@ export function App({ bridge }: { bridge: Bridge }) {
   };
   const sessionLabel = (s: ModelingSession) => s.isPlanning ? 'Preparing tasks' : state.tasks.some(t => t.sessionId === s.id && t.status === 'running') ? 'Running' : `${visibleTasks.filter(t => t.sessionId === s.id).length} tasks`;
   const planCard = session && !task && sessionTasks.length > 0 ? <section className="session-plan" aria-label="Session tasks">
-    <div className="session-plan-heading"><h3><button className="session-plan-toggle" aria-expanded={!collapsedPlans.has(session.id)} aria-controls={`session-plan-${session.id}`} onClick={() => setCollapsedPlans(prev => { const next = new Set(prev); next.has(session.id) ? next.delete(session.id) : next.add(session.id); return next; })}>
-      {collapsedPlans.has(session.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<span>Tasks</span><span className="muted">({sessionTasks.length})</span>
+    <div className="session-plan-heading"><h3><button className="session-plan-toggle" aria-expanded={openPlans.has(session.id)} aria-controls={`session-plan-${session.id}`} onClick={() => setOpenPlans(prev => { const next = new Set(prev); next.has(session.id) ? next.delete(session.id) : next.add(session.id); return next; })}>
+      {openPlans.has(session.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<span>Tasks</span><span className="muted">({sessionTasks.length})</span>
     </button></h3><button className="quiet" onClick={() => addTask()}><Plus size={13} />Add task</button></div>
-    <div id={`session-plan-${session.id}`} className="session-plan-body" hidden={collapsedPlans.has(session.id)}>
+    <div id={`session-plan-${session.id}`} className="session-plan-body" hidden={!openPlans.has(session.id)}>
       <div className="session-plan-tasks">{sessionTasks.map(t => <div key={t.id} className="session-plan-row"><button className="plan-task-title" onClick={() => select(t.id)}><span>{t.title}</span></button><Status status={t.status} label={waitingLabel(t)} />{taskControls(t)}</div>)}</div>
     </div>
   </section> : null;

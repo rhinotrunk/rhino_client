@@ -473,6 +473,11 @@ input.task-search { margin: 2px 10px 10px; width: calc(100% - 20px); height: 28p
 .model-select { height: 26px; width: auto; max-width: 100%; padding: 0 22px 0 8px; border-radius: 6px; font-size: 11px; background-color: var(--background); }
 .execution-overview .model-select { width: 100%; }
 .composer-bottom .model-select { max-width: 60%; }
+/* Stop: a quiet pill that turns red on hover, always on one line. */
+.stop-button { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; white-space: nowrap; height: 28px; padding: 0 12px 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); transition: background .12s, color .12s; }
+.stop-button svg { fill: currentColor; }
+.stop-button:hover:not(:disabled) { background: var(--bad); color: var(--card); border-color: var(--bad); }
+.task-actions { flex-wrap: nowrap; flex-shrink: 0; }
 }
 
 
