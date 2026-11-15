@@ -1,4 +1,5 @@
 using System.Text.Json;
+using RhinoClient.Agent;
 using Eto.Forms;
 using Rhino;
 
@@ -26,7 +27,9 @@ internal sealed class PanelBridge : IDisposable
         try
         {
             using var message = JsonDocument.Parse(e.Message);
-            if (message.RootElement.ValueKind == JsonValueKind.Object)
+            if (message.RootElement.ValueKind == JsonValueKind.Object &&
+                message.RootElement.TryGetProperty("type", out var type) &&
+                type.ValueKind == JsonValueKind.String)
                 _receive(message.RootElement.Clone());
         }
         catch (JsonException ex)
@@ -51,7 +54,7 @@ internal sealed class PanelBridge : IDisposable
     public void Post(object message)
     {
         if (_disposed) return;
-        var json = JsonSerializer.Serialize(message);
+        var json = JsonSerializer.Serialize(message, AgentJson.Options);
         if (!_loaded) _pending.Enqueue(json);
         else _ = DeliverAsync(json);
     }

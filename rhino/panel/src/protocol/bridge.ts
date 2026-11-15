@@ -1,11 +1,9 @@
-import { previewHistory } from '../graph/fixture';
 import type { HostEvent, PanelCommand } from './events';
-
+import { createPreview } from './preview';
+import { repoPreview } from './repoPreview';
 declare const __PREVIEW__: boolean;
-
 type Listener = (event: HostEvent) => void;
 type Transport = { postMessage(message: string): void };
-
 declare global {
   interface Window {
     eto?: Transport;
@@ -13,74 +11,23 @@ declare global {
     rhinoClient?: { receive(event: HostEvent): void };
   }
 }
-
 export interface Bridge {
   readonly kind: 'native' | 'preview' | 'unavailable';
   send(command: PanelCommand): void;
   subscribe(listener: Listener): () => void;
 }
-
 export function createBridge(): Bridge {
   const listeners = new Set<Listener>();
-  const receive = (event: HostEvent) => {
-    for (const listener of listeners) listener(event);
-  };
+  const receive = (event: HostEvent) => { for (const listener of listeners) listener(event); };
   window.rhinoClient = { receive };
-
-  // Eto's shim is ready at document start on macOS. WebView2 exists earlier
-  // than the shim on Windows; Eto receives its messages on the same channel.
   const transport = window.eto ?? window.chrome?.webview;
+  const preview = !transport && __PREVIEW__ ? createPreview(receive) : undefined;
   return {
-    kind: transport ? 'native' : __PREVIEW__ ? 'preview' : 'unavailable',
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
-    },
+    kind: transport ? 'native' : preview ? 'preview' : 'unavailable',
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     send(command) {
-      if (transport) {
-        transport.postMessage(JSON.stringify(command));
-        return;
-      }
-      if (!__PREVIEW__) return;
-      queueMicrotask(() => {
-        if (command.type === 'ready') {
-          const scheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-          receive({ type: 'theme', scheme });
-          receive({ type: 'session', server: 'http://localhost:5280/', repo: 'demo', branch: 'main' });
-          receive({ type: 'status', message: 'Browser preview', error: false, busy: false });
-          return;
-        }
-        if (command.type === 'graph') {
-          receive({
-            type: 'graph',
-            repo: command.repo,
-            truncated: false,
-            error: false,
-            message: '',
-            commits: previewHistory(),
-          });
-          return;
-        }
-        if (command.type === 'commits') {
-          receive({
-            type: 'commits',
-            error: false,
-            message: '',
-            commits: [
-              { id: 'sha256:' + 'a'.repeat(64), message: 'Update geometry' },
-              { id: 'sha256:' + 'b'.repeat(64), message: 'Initial commit' },
-            ],
-          });
-          return;
-        }
-        const verb = command.type === 'pull' ? 'Pull' : 'Push';
-        receive({
-          type: 'status',
-          message: `Preview ${verb.toLowerCase()} ${command.repo} ${command.branch}`,
-          error: false,
-          busy: false,
-        });
-      });
+      if (transport) transport.postMessage(JSON.stringify(command));
+      else if (preview) { if (!repoPreview(command, receive)) preview(command); }
     },
   };
 }

@@ -81,6 +81,18 @@ internal sealed class WorkingCopy
         doc.Strings.SetString(BranchKey, branch);
     }
 
+    /// <summary>Forgets the base commit so the next push sends the whole document. A base commit only exists in the repository it came from.</summary>
+    internal void Detach()
+    {
+        BaseCommit = null;
+        _loadedFor = null;
+        _entries.Clear();
+        _serials.Clear();
+        HasUnsupported = false;
+        UnsupportedSummary = null;
+        Require().Strings.Delete(BaseKey);
+    }
+
     internal BaseEntry? Find(string key) => _entries.TryGetValue(key, out var entry) ? entry : null;
 
     internal bool SerialMatches(string id, uint serial) =>

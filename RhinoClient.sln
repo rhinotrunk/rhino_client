@@ -1,0 +1,34 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoClient", "rhino\plugin\RhinoClient.csproj", "{D94F345A-AEBB-46FB-BAC5-BFCE679A3943}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoTrunk.Client", "..\git_engine\src\RhinoTrunk.Client\RhinoTrunk.Client.csproj", "{5E4079AD-B58A-4F4C-97A5-94EF944ED677}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoTrunk.Contracts", "..\git_engine\src\RhinoTrunk.Contracts\RhinoTrunk.Contracts.csproj", "{035B0147-E5E0-485A-B2EB-DB2DFA5B6F35}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D94F345A-AEBB-46FB-BAC5-BFCE679A3943}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D94F345A-AEBB-46FB-BAC5-BFCE679A3943}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D94F345A-AEBB-46FB-BAC5-BFCE679A3943}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D94F345A-AEBB-46FB-BAC5-BFCE679A3943}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5E4079AD-B58A-4F4C-97A5-94EF944ED677}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E4079AD-B58A-4F4C-97A5-94EF944ED677}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E4079AD-B58A-4F4C-97A5-94EF944ED677}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E4079AD-B58A-4F4C-97A5-94EF944ED677}.Release|Any CPU.Build.0 = Release|Any CPU
+		{035B0147-E5E0-485A-B2EB-DB2DFA5B6F35}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{035B0147-E5E0-485A-B2EB-DB2DFA5B6F35}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{035B0147-E5E0-485A-B2EB-DB2DFA5B6F35}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{035B0147-E5E0-485A-B2EB-DB2DFA5B6F35}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
