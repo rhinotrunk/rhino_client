@@ -776,6 +776,9 @@ public sealed partial class GeometrySync : IDisposable
             if (_disposed) return SyncResult.Fail("The panel has closed.");
             if (!await _operation.WaitAsync(0, cancellationToken).ConfigureAwait(false))
                 return SyncResult.Fail("A pull or push is already running.");
+            // A commit preview draws over the model and hides objects; anything that changes the model or its
+            // commit makes it wrong, so it comes down first. Cached meshes stay: they are keyed by geometry hash.
+            DiscardPreview();
             try
             {
                 var result = await action().ConfigureAwait(false);

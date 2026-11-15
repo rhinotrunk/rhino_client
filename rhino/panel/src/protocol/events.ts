@@ -51,7 +51,8 @@ export type HostEvent =
   | { type: 'branches'; server: string; repo: string; branches: string[]; message: string; error: boolean }
   | { type: 'graph'; repo: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
   | { type: 'status'; message: string; error: boolean; busy: boolean }
-  | { type: 'theme'; scheme: 'light' | 'dark' };
+  | { type: 'theme'; scheme: 'light' | 'dark' }
+  | { type: 'selection.clear' };
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;

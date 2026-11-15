@@ -83,6 +83,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
         setBranchNote(event.error ? event.message : "");
         setListedBranchServer(event.server);
         setListedBranchRepo(event.repo);
+      } else if (event.type === "selection.clear") {
+        if (hostRef.current) clearSelection(hostRef.current);
       } else if (event.type === "graph") {
         if (event.repo !== query.current.repo) return;
         setHistory({

@@ -74,12 +74,15 @@ public sealed partial class GeometrySync
     /// </summary>
     public async Task<SyncResult> PreviewCommitAsync(string server, string repo, string commit, CancellationToken cancellationToken = default)
     {
+        var generation = Volatile.Read(ref _previewGeneration);
         try
         {
             var loaded = await LoadCommitPreviewAsync(server, repo, commit, cancellationToken).ConfigureAwait(false);
             if (loaded is null) return SyncResult.Fail("This model is not on a commit of that repository; pull it first to preview commits.");
             var (info, diff, basis) = loaded.Value;
             cancellationToken.ThrowIfCancellationRequested();
+            if (generation != Volatile.Read(ref _previewGeneration) || _operation.CurrentCount == 0)
+                return SyncResult.Fail("The model changed while the preview was loading; click the commit again.");
             var counts = OnUi(() =>
             {
                 var doc = _copy.Require();
@@ -237,6 +240,18 @@ public sealed partial class GeometrySync
             }
         }
     }
+
+    /// <summary>Takes any commit, merge or compare preview off the screen and stops a preview still loading.</summary>
+    private void DiscardPreview()
+    {
+        Interlocked.Increment(ref _previewGeneration);
+        try { OnUi(ClearPreview); }
+        catch (Exception)
+        {
+        }
+    }
+
+    private int _previewGeneration;
 
     private void Remember(string hash, CapturedShape shape)
     {

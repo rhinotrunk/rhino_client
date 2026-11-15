@@ -204,6 +204,9 @@ public sealed class ClientPanel : Panel
 
         _busy = true;
         _busyMessage = busyMessage;
+        _preview?.Cancel();
+        // The preview is about to be discarded; the graph selection that asked for it goes too.
+        if (_pick is null) _bridge.Post(new { type = "selection.clear" });
         SendStatus(_busyMessage, false, true);
         try
         {
