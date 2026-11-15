@@ -307,13 +307,13 @@ internal sealed class TaskControl : IDisposable
     }
     private void ShowTask(TaskEntry task)
     {
-        if (task.Document is not null) _preview.Show(task.Document, true);
+        if (task.Document is not null) _preview.Show(task.Document, true, task.InputPath);
         else
         {
             var path = task.ResultPath ?? task.WorkingPath;
             if (path is null || !File.Exists(path)) { _previewTaskId = task.Id; _preview.Clear(); return; }
             using var doc = RhinoDoc.OpenHeadless(path) ?? throw new IOException("Could not open task preview.");
-            _preview.Show(doc, true);
+            _preview.Show(doc, true, task.InputPath);
         }
         _previewTaskId = task.Id;
     }
@@ -440,7 +440,7 @@ internal sealed class TaskControl : IDisposable
                 if (task.Activity.LastOrDefault(x => x.Kind == "user")?.Text != task.Instructions) Log(task, "user", task.Instructions);
                 return true;
             });
-            using var mcp = new TaskMcp(task, false, _ => throw new InvalidOperationException(), (k, t) => Log(task, k, t), () => { WriteCopy(task.Document!, task.WorkingPath!); if (_previewTaskId == task.Id) _preview.Show(task.Document!, false); }, token);
+            using var mcp = new TaskMcp(task, false, _ => throw new InvalidOperationException(), (k, t) => Log(task, k, t), () => { WriteCopy(task.Document!, task.WorkingPath!); if (_previewTaskId == task.Id) _preview.Show(task.Document!, false, task.InputPath); }, token);
             var prompt = "You are a Rhino geometry worker. Use only the rhino MCP tools to inspect and edit your assigned document copy. Begin with get_context and list_objects. Scope is enforced by the tools. Never use scripts, shell, external MCP servers, or ActiveDoc. Coordinates use document units. Only polyline/box/sphere creation, transforms and deletion are available. If your request requires unsupported operations or scope expansion, explain that limitation rather than claiming success. Do the requested geometry work, then summarize actual changes and limitations. The shared model is unchanged and PR acceptance is deferred.\nTask: " + task.Title + "\n" + task.Instructions;
             prompt += $"\nBefore editing, estimate the number of objects and tool calls. Your turn is limited to {WorkerBudget.MaxToolCalls} tool calls and stops after {WorkerBudget.MaxConsecutiveErrors} consecutive tool errors. If dimensions or counts are ambiguous, or the requested work exceeds the limit, explain and request clarification or a smaller task before creating geometry. Do not repeatedly retry invalid geometry or unsupported operations.";
             await CodexRunner.Run(task, State, _directory, mcp.Url, prompt, line => ParseEvent(task, line), p => task.Process = p, token);
@@ -451,7 +451,7 @@ internal sealed class TaskControl : IDisposable
                 var result = Path.Combine(_directory, $"result-{task.Id}-{++task.Revision}.3dm");
                 File.Copy(task.WorkingPath!, result);
                 task.ResultPath = result; task.Status = "ready";
-                if (_previewTaskId == task.Id) _preview.Show(task.Document!, true);
+                if (_previewTaskId == task.Id) _preview.Show(task.Document!, true, task.InputPath);
                 Log(task, "status", "Ready to merge. Use Merge to commit this result to its own branch, merge it into the model's branch, and pull it into the model.");
                 return true;
             });

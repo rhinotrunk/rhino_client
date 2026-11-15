@@ -184,6 +184,7 @@ public sealed class GeometrySync : IDisposable
             return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
 
         var branch = TaskBranch.Name(task);
+        var changeNote = "";
         var existing = await client.GetBranchAsync(bound.Repo, branch, cancellationToken).ConfigureAwait(false);
         if (existing is null || existing.Commit == task.BaseCommit)
         {
@@ -199,6 +200,7 @@ public sealed class GeometrySync : IDisposable
             if (captured.Changes.Count == 0)
                 return SyncResult.Success(WithSkips($"'{task.Title}' made no changes, so there is nothing to merge.", captured.Skipped));
 
+            changeNote = $" ({Describe(captured.Changes)})";
             var author = new AuthorInfo { Id = "agent-" + task.TaskId[..Math.Min(8, task.TaskId.Length)], Name = "Agent: " + task.Title, Kind = AuthorKinds.Agent };
             if (existing is null)
             {
@@ -244,8 +246,17 @@ public sealed class GeometrySync : IDisposable
         // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
         var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), cancellationToken, matchCommit: true).ConfigureAwait(false);
         return pulled.Ok
-            ? SyncResult.Success($"Merged '{task.Title}' into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
+            ? SyncResult.Success($"Merged '{task.Title}'{changeNote} into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
             : SyncResult.Fail($"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+    }
+
+    // "1 added, 0 changed" style summary so it is obvious the task's commit holds only its own changes.
+    private static string Describe(IReadOnlyCollection<Change> changes)
+    {
+        var objects = changes.Where(change => change.Kind == EntityKinds.Object).ToList();
+        var deleted = objects.Count(change => change.Op == ChangeOps.Delete);
+        var others = changes.Count - objects.Count;
+        return $"{objects.Count - deleted} objects added or changed, {deleted} deleted" + (others > 0 ? $", {others} layers/settings" : "");
     }
 
     private static CapturedPush CaptureResult(string path, WorkingCopy taskBase)
