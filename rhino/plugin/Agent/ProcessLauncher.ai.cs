@@ -22,6 +22,12 @@ internal static class ProcessLauncher
         Action<Process> started, CancellationToken ct, TimeSpan? idleTimeout, TimeSpan? turnTimeout, Func<string, IEnumerable<string>>? translate)
     {
         ct.ThrowIfCancellationRequested();
+        // The CLIs read and write UTF-8 only. Without this, .NET on Windows uses the ANSI code page (Rhino has no
+        // console), so a prompt with "×" or "é" reaches Codex as bytes it rejects. No byte order mark either.
+        var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        psi.StandardInputEncoding = utf8;
+        psi.StandardOutputEncoding = utf8;
+        psi.StandardErrorEncoding = utf8;
         var idlePeriod = idleTimeout ?? WorkerBudget.IdleTimeout;
         using var idle = new CancellationTokenSource(idlePeriod);
         using var deadline = new CancellationTokenSource(turnTimeout ?? WorkerBudget.TurnTimeout);
