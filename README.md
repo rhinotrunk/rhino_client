@@ -56,7 +56,7 @@ Production uses a separate `panel.host.html`, embedded in the plugin. It never s
 
 ## Debug in VS Code
 
-Open this folder, install the recommended extension, select **RhinoClient — Rhino 8**, and press F5. The launch task builds the plugin and starts Rhino with the plugin folder registered for that process. Run `RhinoClient` in Rhino. **Attach to Rhino** is also available for a development instance launched with `npm start`.
+Open this folder, install the recommended extension, select **RhinoClient — Rhino 8**, and press F5. On Windows the launch task builds the plugin and starts Rhino with the plugin folder registered for that process. On Mac the same configuration builds, starts `/Applications/Rhino 8.app`, and attaches, because the debugger cannot launch that app through `dotnet`. That path uses the `rhinoClient.launch` command from `.vscode/rhino-debug`. Run `RhinoClient` in Rhino. **Attach to Rhino** is also available for a development instance launched with `npm start`.
 
 ## Structure
 

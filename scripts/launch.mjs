@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dev = process.argv.includes('--dev');
+const printPid = process.argv.includes('--print-pid');
 const pluginDirectory = join(root, 'rhino/plugin/bin/Debug/net8.0');
 if (!existsSync(join(pluginDirectory, 'RhinoClient.rhp'))) {
   throw new Error('Build the plugin first with npm run build.');
@@ -34,5 +35,8 @@ const child = spawn(executable, process.platform === 'win32' ? ['/netcore', '/no
   stdio: 'ignore',
 });
 child.on('error', (error) => { console.error(error.message); process.exitCode = 1; });
-child.once('spawn', () => console.log('Rhino started. Run RhinoClient in its command line.'));
+child.once('spawn', () => {
+  if (printPid) console.log(String(child.pid));
+  else console.log('Rhino started. Run RhinoClient in its command line.');
+});
 child.unref();
