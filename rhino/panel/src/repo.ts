@@ -33,6 +33,7 @@ export function useRepo(bridge: Bridge) {
   const [requestedRepo, setRequestedRepo] = useState("");
   const [tick, setTick] = useState(0);
   const [control, setControl] = useState<ControlState>();
+  const [fresh, setFresh] = useState("");
   const [repos, setRepos] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
   const [branches, setBranches] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
   const query = useRef({ server: "http://localhost:5280/", repo: "" });
@@ -137,7 +138,8 @@ export function useRepo(bridge: Bridge) {
     bridge.send({ type: "branches", server: nextServer, repo: nextRepo });
   }
 
-  function chooseRepo(value: string) {
+  function chooseRepo(value: string, created = false) {
+    setFresh(created ? value.trim() : "");
     setRepo(value);
     if (value.trim() !== branches.repo) setBranches({ loading: false, options: [], note: "", server: "", repo: "" });
     remember(server, value);
@@ -151,7 +153,7 @@ export function useRepo(bridge: Bridge) {
 
   const idle = ready && !busy;
   return {
-    bridge, server, repo, branch, message, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
+    bridge, server, repo, branch, message, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
     idle,
     setServer, setRepo, setBranch, setMessage, remember, requestRepos, requestBranches, chooseRepo,
     pull() {

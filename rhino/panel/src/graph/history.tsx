@@ -116,7 +116,7 @@ function historyNote(repo: Repo, requestedRepo: string, ready: boolean): string 
   if (!ready) return null;
   if (!requestedRepo) return "Choose a repository above to see its history.";
   if (!history.loaded || history.repo !== requestedRepo) return "Loading history…";
-  if (history.error) return history.error;
+  if (history.error) return repo.fresh && repo.fresh === requestedRepo ? "New repository. Describe your changes and push to create it." : history.error;
   if (history.commits.length === 0) return "No commits yet. Push to create the first one.";
   return null;
 }

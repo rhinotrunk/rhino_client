@@ -48,6 +48,9 @@ export function Header({
               empty="No repositories on this server."
               onOpen={() => repo.requestRepos()}
               onChoose={(name) => { repo.chooseRepo(name); setOpen(null); }}
+              onCreate={(name) => { repo.chooseRepo(name, true); setOpen(null); }}
+              sanitize={(name) => name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "")}
+              hint="Lowercase letters, digits, . _ -. The repository is created on your first push."
             />
           ) : null}
           </div>
@@ -67,6 +70,7 @@ export function Header({
               onOpen={() => repo.requestBranches()}
               onChoose={(name) => { repo.setBranch(name); setOpen(null); }}
               onCreate={(name) => { repo.setBranch(name); setOpen(null); }}
+              hint="Starts from the checked-out commit and is created on your next push."
             />
           ) : null}
           </div>
@@ -191,9 +195,12 @@ function Picker({
 // Opens straight onto the list: type to filter, click or press Enter to choose. A name that is not listed
 // can still be used, which is how a new branch is started.
 function ListMenu({
-  label, value, options, note, loading, empty, onOpen, onChoose, onCreate,
+  label, value, options, note, loading, empty, onOpen, onChoose, onCreate, sanitize, hint,
 }: {
   onCreate?: (name: string) => void;
+  /** Turns what was typed into a valid name; the hint under the field says what it needs. */
+  sanitize?: (name: string) => string;
+  hint?: string;
   label: string; value: string; options: readonly string[]; note: string; loading: boolean; empty: string; offset?: string;
   onOpen: () => void; onChoose: (name: string) => void;
 }) {
@@ -202,7 +209,7 @@ function ListMenu({
   const [creating, setCreating] = useState(false);
   useEffect(onOpen, []);
   const create = () => {
-    const name = filter.trim().replace(/\s+/g, "-");
+    const name = sanitize ? sanitize(filter) : filter.trim().replace(/\s+/g, "-");
     if (name && onCreate) onCreate(name);
   };
   const query = filter.trim().toLowerCase();
@@ -235,11 +242,11 @@ function ListMenu({
         creating ? (
           <button type="button" onClick={create} disabled={!filter.trim()} className="h-8 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground disabled:opacity-40">Create</button>
         ) : (
-          <button type="button" title="New branch" aria-label="New branch" onClick={() => { setCreating(true); setFilter(""); }} className="flex h-8 w-8 items-center justify-center rounded-md border hover:bg-accent"><Plus size={16} /></button>
+          <button type="button" title={`New ${label.toLowerCase()}`} aria-label={`New ${label.toLowerCase()}`} onClick={() => { setCreating(true); setFilter(""); }} className="flex h-8 w-8 items-center justify-center rounded-md border hover:bg-accent"><Plus size={16} /></button>
         )
       ) : null}
       </div>
-      {creating ? <p className="px-1 pb-1 text-[11px] text-muted-foreground">Starts from the checked-out commit and is created on your next push.</p> : null}
+      {creating ? <p className="px-1 pb-1 text-[11px] text-muted-foreground">{hint}</p> : null}
       <ul role="listbox" className={cn("max-h-64 overflow-auto", creating && "hidden")}>
         {shown.map((name, index) => (
           <li key={name}>
