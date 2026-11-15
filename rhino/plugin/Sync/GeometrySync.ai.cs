@@ -393,9 +393,9 @@ public sealed class GeometrySync : IDisposable
         {
             return await FetchGraphAsync(bound, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException) when (LocalServer.IsLoopback(bound.Server))
+        catch (Exception ex) when (LocalServer.CanRecover(bound.Server, ex))
         {
-            await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
+            await LocalServer.RecoverAsync(bound.Server, ex, cancellationToken).ConfigureAwait(false);
             return await FetchGraphAsync(bound, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -414,9 +414,9 @@ public sealed class GeometrySync : IDisposable
         {
             return await FetchReposAsync(normalized, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException) when (LocalServer.IsLoopback(normalized))
+        catch (Exception ex) when (LocalServer.CanRecover(normalized, ex))
         {
-            await LocalServer.EnsureRunningAsync(normalized, cancellationToken).ConfigureAwait(false);
+            await LocalServer.RecoverAsync(normalized, ex, cancellationToken).ConfigureAwait(false);
             return await FetchReposAsync(normalized, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -434,9 +434,9 @@ public sealed class GeometrySync : IDisposable
         {
             return await FetchBranchesAsync(bound, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException) when (LocalServer.IsLoopback(bound.Server))
+        catch (Exception ex) when (LocalServer.CanRecover(bound.Server, ex))
         {
-            await LocalServer.EnsureRunningAsync(bound.Server, cancellationToken).ConfigureAwait(false);
+            await LocalServer.RecoverAsync(bound.Server, ex, cancellationToken).ConfigureAwait(false);
             return await FetchBranchesAsync(bound, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -568,11 +568,11 @@ public sealed class GeometrySync : IDisposable
                 Report(cancelled);
                 return cancelled;
             }
-            catch (HttpRequestException) when (_clientServer is { } server && LocalServer.IsLoopback(server))
+            catch (Exception ex) when (_clientServer is { } server && LocalServer.CanRecover(server, ex))
             {
                 try
                 {
-                    await LocalServer.EnsureRunningAsync(server, cancellationToken).ConfigureAwait(false);
+                    await LocalServer.RecoverAsync(server, ex, cancellationToken).ConfigureAwait(false);
                     var result = await action().ConfigureAwait(false);
                     Report(result);
                     return result;
@@ -659,6 +659,8 @@ public sealed class GeometrySync : IDisposable
     {
         if (exception.Error.Code == ErrorCodes.RefConflict)
             return "The branch has new commits. Update is not available yet. " + exception.Error.Message;
+        if (LocalServer.IsMissingRoute(exception))
+            return "The server does not have an endpoint this plugin uses, so it is probably older than the plugin. Update and restart the server.";
         if (exception.Error.Errors is not { Count: > 0 } details)
             return string.IsNullOrEmpty(exception.Error.Message)
                 ? exception.Error.Code
