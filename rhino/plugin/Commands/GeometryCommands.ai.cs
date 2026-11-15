@@ -14,7 +14,8 @@ public sealed class RhinoClientPullCommand : Command
 {
     public override string EnglishName => "RhinoClientPull";
 
-    protected override Result RunCommand(RhinoDoc doc, RunMode mode) => SyncCommands.Run(doc, pull: true);
+    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+        SyncCommands.Run(doc, pull: true, interactive: mode != RunMode.Scripted);
 }
 
 [Guid("3e8b6c14-5a27-4d90-b7e2-1f0c9a6d58b3")]
@@ -27,7 +28,7 @@ public sealed class RhinoClientPushCommand : Command
 
 internal static class SyncCommands
 {
-    public static Result Run(RhinoDoc doc, bool pull)
+    public static Result Run(RhinoDoc doc, bool pull, bool interactive = true)
     {
         var panel = Panels.GetPanel<ClientPanel>(doc.RuntimeSerialNumber);
         GeometrySync? owned = panel is null ? new GeometrySync(doc.RuntimeSerialNumber) : null;
@@ -48,8 +49,8 @@ internal static class SyncCommands
                 return Result.Cancel;
 
             var task = panel is not null
-                ? pull ? panel.Pull(target) : panel.Push(target, message)
-                : pull ? owned!.PullAsync(target) : owned!.PushAsync(target, message);
+                ? pull ? panel.Pull(target, interactive) : panel.Push(target, message)
+                : pull ? owned!.PullAsync(target, interactive) : owned!.PushAsync(target, message);
             var result = Wait(task);
             return result.Ok ? Result.Success : Result.Failure;
         }

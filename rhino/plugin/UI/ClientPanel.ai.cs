@@ -85,11 +85,11 @@ public sealed class ClientPanel : Panel
     internal Task<IReadOnlyList<CommitChoice>> ListCommits(SyncTarget target) =>
         _sync.ListCommitsAsync(target, _unload.Token);
 
-    internal Task<SyncResult> Pull(SyncTarget target) => RunAsync(true, target, "");
+    internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) => RunAsync(true, target, "", interactive);
 
-    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync(false, target, message);
+    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync(false, target, message, true);
 
-    private async Task<SyncResult> RunAsync(bool pull, SyncTarget target, string message)
+    private async Task<SyncResult> RunAsync(bool pull, SyncTarget target, string message, bool interactive)
     {
         if (_closed) return SyncResult.Fail("The panel has closed.");
         if (_busy)
@@ -105,7 +105,7 @@ public sealed class ClientPanel : Panel
         try
         {
             var result = pull
-                ? await _sync.PullAsync(target, _unload.Token)
+                ? await _sync.PullAsync(target, interactive, _unload.Token)
                 : await _sync.PushAsync(target, message, _unload.Token);
             _busy = false;
             SendStatus(result.Message, !result.Ok, false);

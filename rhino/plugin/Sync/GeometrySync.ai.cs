@@ -52,7 +52,11 @@ public sealed class GeometrySync : IDisposable
         Run(() => PushCore(target, message, cancellationToken), cancellationToken);
 
     public Task<SyncResult> PullAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
-        Run(() => PullCore(target, cancellationToken), cancellationToken);
+        PullAsync(target, interactive: true, cancellationToken);
+
+    /// <summary>Pulls a commit. An interactive pull reviews objects whose ids already differ. A scripted pull stops instead of prompting.</summary>
+    public Task<SyncResult> PullAsync(SyncTarget target, bool interactive, CancellationToken cancellationToken = default) =>
+        Run(() => PullCore(target, interactive, cancellationToken), cancellationToken);
 
     /// <summary>Recent commits on the branch, newest first. Does not run a pull.</summary>
     public Task<IReadOnlyList<CommitChoice>> ListCommitsAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
@@ -149,17 +153,26 @@ public sealed class GeometrySync : IDisposable
             $"Pushed {captured.Changes.Count} changes to {bound.Branch} ({response.Commit}).", captured.Skipped), warning));
     }
 
-    private async Task<SyncResult> PullCore(SyncTarget target, CancellationToken cancellationToken)
+    private async Task<SyncResult> PullCore(SyncTarget target, bool interactive, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await PullCommitAsync(target, interactive, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PullReviewCancelledException)
+        {
+            return SyncResult.Fail("Cancelled.");
+        }
+    }
+
+    private async Task<SyncResult> PullCommitAsync(SyncTarget target, bool interactive, CancellationToken cancellationToken)
     {
         var bound = Normalize(target);
         OnUi(() =>
         {
-            var doc = _copy.Require();
+            _copy.Require();
             _copy.Read();
             _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
-            //TODO: Add Conflicts management
-            //if (DocumentMapper.ModelObjectCount(doc) > 0)
-            //    throw new SyncException("Pull replaces the document and only runs when it has no model objects.");
         });
 
         var client = ClientFor(bound.Server);
@@ -173,15 +186,39 @@ public sealed class GeometrySync : IDisposable
         DocumentMapper.RejectUnsupported(entities);
         var blobs = await DownloadAsync(client, bound.Repo, ComponentHashes(entities), cancellationToken).ConfigureAwait(false);
         var objectCount = entities.Count(entity => entity.Kind == EntityKinds.Object);
-        var warning = OnUi(() =>
+        var applied = OnUi(() =>
         {
-            var serials = DocumentMapper.Apply(_copy.Require(), entities, blobs);
-            var entries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
-            foreach (var entity in entities)
-                entries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
-            return _copy.Replace(listed.Commit, entries, serials);
+            var doc = _copy.Require();
+            var decoded = DocumentMapper.DecodeObjects(entities, blobs);
+            List<ObjectConflict>? conflicts = null;
+            try
+            {
+                conflicts = PullConflicts.Find(doc, decoded);
+                IReadOnlyDictionary<string, ConflictChoice> choices;
+                if (conflicts.Count == 0)
+                    choices = new Dictionary<string, ConflictChoice>();
+                else if (!interactive)
+                    throw new SyncException(PullConflicts.ScriptedMessage(conflicts));
+                else
+                    choices = PullConflicts.Review(doc, conflicts);
+
+                var serials = DocumentMapper.Apply(doc, entities, blobs, decoded, choices);
+                var entries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
+                foreach (var entity in entities)
+                    entries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
+                return (Warning: _copy.Replace(listed.Commit, entries, serials), Choices: choices);
+            }
+            finally
+            {
+                if (conflicts is not null)
+                {
+                    foreach (var conflict in conflicts) conflict.Dispose();
+                }
+
+                foreach (var item in decoded) item.Geometry.Dispose();
+            }
         });
-        return SyncResult.Success(WithWarning($"Pulled {bound.Branch} ({listed.Commit}, {objectCount} objects).", warning));
+        return SyncResult.Success(WithWarning(PullSummary(bound.Branch, listed.Commit, objectCount, applied.Choices), applied.Warning));
     }
 
     private async Task<IReadOnlyList<CommitChoice>> ListCommitsCore(SyncTarget target, CancellationToken cancellationToken)
@@ -450,6 +487,26 @@ public sealed class GeometrySync : IDisposable
             return who + (string.IsNullOrEmpty(detail.Message) ? detail.Code : detail.Message);
         });
         return exception.Error.Message + " " + string.Join(" ", parts);
+    }
+
+    private static string PullSummary(string branch, string commit, int objectCount, IReadOnlyDictionary<string, ConflictChoice> choices)
+    {
+        var message = $"Pulled {branch} ({commit}, {objectCount} objects).";
+        if (choices.Count == 0) return message;
+        var existing = 0;
+        var incoming = 0;
+        var merged = 0;
+        foreach (var choice in choices.Values)
+        {
+            switch (choice)
+            {
+                case ConflictChoice.KeepExisting: existing++; break;
+                case ConflictChoice.KeepIncoming: incoming++; break;
+                case ConflictChoice.Merge: merged++; break;
+            }
+        }
+
+        return message + $" Reviewed {choices.Count} conflicts: kept {existing} existing, kept {incoming} incoming, merged {merged}.";
     }
 
     private static string WithSkips(string message, int skipped) => skipped == 0
