@@ -92,7 +92,7 @@ public sealed partial class GeometrySync
                 {
                     $"{ShortCommit(info.Id)}  {FirstLine(info.Message)}",
                     $"{info.Author.Name ?? info.Author.Id} ({info.Author.Kind}), {info.Timestamp.LocalDateTime:g}",
-                    info.Id == basis ? "This is the commit the model is on." : $"Against your model: {added} added (green), {modified} modified (blue), {removed} removed (red).",
+                    info.Id == basis ? "This is the commit the model is on." : $"Against your model: {Legend(added, modified, removed)}",
                     "Click another dot to compare; shift-click several to pick a merge.",
                 };
                 Show(doc, scene);
@@ -596,7 +596,7 @@ public sealed partial class GeometrySync
         {
             var taken = state.Choices.Count(c => state.Objects[c.Key][c.Value].Source == s);
             var offered = state.Objects.Count(o => o.Value.Any(c => c.Source == s));
-            hud.Add($"[{ColorName(PickColors[s % PickColors.Length])}] {ShortCommit(state.Sources[s].Id)} {FirstLine(state.Sources[s].Message)}: {taken} of {offered} taken");
+            hud.Add($"{PreviewConduit.Swatch(PickColors[s % PickColors.Length])}{ShortCommit(state.Sources[s].Id)} {FirstLine(state.Sources[s].Message)}: {taken} of {offered} taken");
         }
 
         var undecided = state.Objects.Count(o => o.Value.Count > 1 && !state.Choices.ContainsKey(o.Key));

@@ -489,6 +489,14 @@ internal static partial class DocumentMapper
         RenameClash(doc, parentId, name, id);
 
         var index = doc.Layers.Find(id, true, RhinoMath.UnsetIntIndex);
+        if (index == RhinoMath.UnsetIntIndex)
+        {
+            // Rhino keeps a deleted layer, id and all, in its table and will not add another layer with that id. Checking
+            // out a commit without the layer and then one with it again would fail, so restore the deleted layer instead.
+            var dead = doc.Layers.Find(id, false, RhinoMath.UnsetIntIndex);
+            if (dead != RhinoMath.UnsetIntIndex && doc.Layers[dead].IsDeleted && doc.Layers.Undelete(dead)) index = dead;
+        }
+
         var found = index != RhinoMath.UnsetIntIndex;
         var layer = found ? doc.Layers[index] : new Layer { Id = id };
         layer.Name = name;

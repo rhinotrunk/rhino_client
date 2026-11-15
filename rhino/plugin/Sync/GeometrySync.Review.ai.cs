@@ -18,8 +18,6 @@ public enum CompareMode
     Cycle,
     /// <summary>Every option at once, ghosted over the model.</summary>
     Overlay,
-    /// <summary>The model and a copy per option, side by side in the viewport.</summary>
-    Side,
 }
 
 /// <summary>BRANCH, MERGE and COMPARE: operations that read or move branches and show the result in the viewport.</summary>
@@ -29,9 +27,15 @@ public sealed partial class GeometrySync
     internal static readonly Color RemovedColor = Color.FromArgb(235, 40, 40);
     internal static readonly Color ModifiedColor = Color.FromArgb(40, 120, 255);
     internal static readonly Color NeutralColor = Color.FromArgb(150, 150, 150);
+    /// <summary>Objects on the layers a blocked merge trips over.</summary>
+    internal static readonly Color ClashColor = Color.FromArgb(245, 150, 0);
     /// <summary>Removed objects show at 10% opacity inside their red outline.</summary>
     private const double GhostTransparency = 0.9;
     private const int OutlinePixels = 3;
+
+    /// <summary>"● 3 added ● 1 modified ● 2 removed" for a HUD line, with dots in the preview's colours.</summary>
+    internal static string Legend(int added, int modified, int removed) =>
+        $"{PreviewConduit.Swatch(AddedColor)}{added} added {PreviewConduit.Swatch(ModifiedColor)}{modified} modified {PreviewConduit.Swatch(RemovedColor)}{removed} removed";
 
     /// <summary>A light tint of a change colour for the object's fill; the outline carries the full colour.</summary>
     internal static Color Tint(Color color, double amount = 0.3) => Color.FromArgb(
@@ -53,8 +57,14 @@ public sealed partial class GeometrySync
     /// added objects green, removed red ghosts, modified blue with the current version hidden.
     /// Interactive: step through options and modes until Done. Scripted: leaves the preview on screen.
     /// </summary>
-    public Task<SyncResult> CompareAsync(SyncTarget current, IReadOnlyList<string>? options, string at, CompareMode mode, bool interactive, CancellationToken cancellationToken = default) =>
-        Run(() => CompareCore(current, options, at, mode, interactive, cancellationToken), cancellationToken);
+    /// <param name="focusLayers">
+    /// Layers to pick out: objects on them or their sublayers are drawn amber and the rest of each option's changes dimmed.
+    /// </param>
+    /// <param name="clearHint">How the user clears a preview left on screen; defaults to the Off option.</param>
+    public Task<SyncResult> CompareAsync(
+        SyncTarget current, IReadOnlyList<string>? options, string at, CompareMode mode, bool interactive, CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? focusLayers = null, string? clearHint = null) =>
+        Run(() => CompareCore(current, options, at, mode, interactive, cancellationToken, focusLayers, clearHint), cancellationToken);
 
     /// <summary>Removes any merge or compare preview from the viewport.</summary>
     public static void ClearPreview()
@@ -145,6 +155,21 @@ public sealed partial class GeometrySync
         if (await client.GetBranchAsync(bound.Repo, into, cancellationToken).ConfigureAwait(false) is null)
             return SyncResult.Fail($"Branch '{into}' does not exist.");
 
+        // Layers both branches created separately at the same path: this branch takes over the target's ids first, so
+        // the merge sees one layer instead of two with the same name. The model has no unpushed edits (checked above),
+        // so it follows the branch to that commit.
+        var layerNote = "";
+        var adopted = await AdoptLayersAsync(client, bound.Repo, bound.Branch, head.Commit, into, $"'{into}'", cancellationToken).ConfigureAwait(false);
+        if (adopted is not null)
+        {
+            head = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false)
+                ?? throw new SyncException($"Branch '{bound.Branch}' disappeared.");
+            var followed = await PullCommitAsync(current, null, interactive: false, discardLocal: true, cancellationToken).ConfigureAwait(false);
+            if (!followed.Ok) return SyncResult.Fail($"Took over the layers of '{into}' on {bound.Branch}, but updating the model failed: {followed.Message}");
+            layerNote = $"{bound.Branch} took over {(adopted.Paths.Count == 1 ? "the layer" : $"{adopted.Paths.Count} layers")} {Quoted(adopted.Paths)} from '{into}' first, since both branches had created them separately. ";
+            RhinoApp.WriteLine("RhinoClient: " + layerNote.TrimEnd());
+        }
+
         var resolutions = new List<MergeResolution>();
         MergePreviewResponse preview;
         while (true)
@@ -168,7 +193,18 @@ public sealed partial class GeometrySync
 
         if (preview.Status == MergePreviewStatuses.UpToDate)
             return SyncResult.Success($"{into} already contains everything on {bound.Branch}.");
-        if (!preview.CanMerge) return SyncResult.Fail($"Merging {bound.Branch} into {into} would break the model: {MergeProblems(preview)}");
+        if (!preview.CanMerge)
+        {
+            var problem = $"Cannot merge {bound.Branch} into {into}. " + (preview.Validation.Count > 0 ? DescribeValidation(preview.Validation) : MergeProblems(preview));
+            if (preview.Validation.Count == 0) return SyncResult.Fail(problem);
+            // Show why: each branch's changes on the commit they split from, one at a time, until the user is done looking.
+            RhinoApp.WriteLine("RhinoClient: " + problem);
+            var at = preview.MergeBase ?? preview.Ours;
+            var focus = preview.Validation.Where(issue => issue.Kind == EntityKinds.Layer && !string.IsNullOrEmpty(issue.Id)).Select(issue => issue.Id!).ToList();
+            if (interactive)
+                await CompareCore(current, new[] { bound.Branch, into }, at, CompareMode.Cycle, interactive: true, cancellationToken, focus).ConfigureAwait(false);
+            return SyncResult.Fail(problem + " Rename or remove the layers on one branch, push, and merge again.");
+        }
         if (preview.AutoResolved.Count > 0 && !interactive && !approveRules)
             return SyncResult.Fail($"Merge rules resolved {preview.AutoResolved.Count} conflicts ({string.Join(", ", preview.AutoResolved.Select(a => a.Rule).Distinct())}). Review them and pass ApproveRules=Yes.");
 
@@ -193,7 +229,7 @@ public sealed partial class GeometrySync
             var hud = new List<string>
             {
                 $"Merge {bound.Branch} into {into}",
-                $"{preview.Incoming.Added} added (green), {preview.Incoming.Modified} modified (blue), {preview.Incoming.Deleted} removed (red)",
+                Legend(preview.Incoming.Added, preview.Incoming.Modified, preview.Incoming.Deleted),
                 approval,
             };
             if (preview.AutoResolved.Count > 0)
@@ -239,7 +275,7 @@ public sealed partial class GeometrySync
         }
 
         var pulled = await PullCommitAsync(new SyncTarget(bound.Server, bound.Repo, into), null, interactive: false, discardLocal: false, cancellationToken).ConfigureAwait(false);
-        var done = $"Merged {bound.Branch} into {into} ({ShortCommit(merged.Commit)}, {merged.Status}).";
+        var done = layerNote + $"Merged {bound.Branch} into {into} ({ShortCommit(merged.Commit)}, {merged.Status}).";
         return pulled.Ok
             ? SyncResult.Success(done + $" The model is now on {into}.")
             : SyncResult.Fail(done + " Switching the model to it failed: " + pulled.Message);
@@ -308,7 +344,8 @@ public sealed partial class GeometrySync
     private sealed record ComparedOption(string Name, MergePreviewResponse Preview);
 
     private async Task<SyncResult> CompareCore(
-        SyncTarget current, IReadOnlyList<string>? requested, string at, CompareMode mode, bool interactive, CancellationToken cancellationToken)
+        SyncTarget current, IReadOnlyList<string>? requested, string at, CompareMode mode, bool interactive, CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? focusLayers = null, string? clearHint = null)
     {
         var bound = Normalize(current);
         var client = ClientFor(bound.Server);
@@ -357,18 +394,17 @@ public sealed partial class GeometrySync
                 var index = 0;
                 while (true)
                 {
-                    Show(doc, BuildCompareScene(doc, options, baseline, geometry, mode, index, atName));
+                    Show(doc, BuildCompareScene(doc, options, baseline, geometry, mode, index, atName, focusLayers));
                     if (!interactive) return "";
                     var choice = Choose(
                         mode == CompareMode.Cycle ? $"Option {index + 1}/{options.Count}: {options[index].Name}" : $"{options.Count} options on {atName} ({mode})",
-                        "Next", "Previous", "Cycle", "Overlay", "Side", "Done");
+                        "Next", "Previous", "Cycle", "Overlay", "Done");
                     switch (choice)
                     {
                         case 0: index = (index + 1) % options.Count; break;
                         case 1: index = (index + options.Count - 1) % options.Count; break;
                         case 2: mode = CompareMode.Cycle; break;
                         case 3: mode = CompareMode.Overlay; break;
-                        case 4: mode = CompareMode.Side; break;
                         default: return options[index].Name;
                     }
                 }
@@ -376,7 +412,7 @@ public sealed partial class GeometrySync
             var summary = string.Join("; ", options.Select(o =>
                 $"{o.Name}: +{o.Preview.Incoming.Added} ~{o.Preview.Incoming.Modified} -{o.Preview.Incoming.Deleted}" +
                 (o.Preview.Conflicts.Count > 0 ? $", {o.Preview.Conflicts.Count} conflicts" : "")));
-            return SyncResult.Success($"Compared with {atName}: {summary}." + (keep ? " The preview stays on screen; run RhinoClientCompare Off to clear it." : ""));
+            return SyncResult.Success($"Compared with {atName}: {summary}." + (keep ? $" The preview stays on screen; {clearHint ?? "run RhinoClientCompare Off to clear it"}." : ""));
         }
         finally
         {
@@ -390,21 +426,25 @@ public sealed partial class GeometrySync
 
     private static PreviewScene BuildCompareScene(
         RhinoDoc doc, IReadOnlyList<ComparedOption> options, IReadOnlyList<DiffEntry> baseline, IReadOnlyDictionary<string, GeometryBase> geometry,
-        CompareMode mode, int index, string atName)
+        CompareMode mode, int index, string atName, IReadOnlyCollection<string>? focusLayers = null)
     {
         var scene = new PreviewScene();
         var hud = new List<string>();
+        // Objects on the layers a merge trips over (and their sublayers) are picked out; the rest are dimmed.
+        var focus = focusLayers is { Count: > 0 }
+            ? WithSublayers(focusLayers, options.SelectMany(o => o.Preview.Changes).Concat(baseline))
+            : null;
         switch (mode)
         {
             case CompareMode.Cycle:
             {
                 var option = options[index];
-                AddResult(scene, doc, option.Preview.Changes, baseline, geometry, Transform.Identity, hide: true);
+                AddResult(scene, doc, option.Preview.Changes, baseline, geometry, Transform.Identity, hide: true, focus: focus);
                 hud.Add($"Option {index + 1} of {options.Count}: {option.Name} on {atName}");
                 hud.Add(Counts(option.Preview));
                 break;
             }
-            case CompareMode.Overlay:
+            default:
             {
                 AddResult(scene, doc, Array.Empty<DiffEntry>(), baseline, geometry, Transform.Identity, hide: true);
                 foreach (var option in options)
@@ -413,36 +453,17 @@ public sealed partial class GeometrySync
                 hud.AddRange(options.Select(o => o.Name + ": " + Counts(o.Preview)));
                 break;
             }
-            default:
-            {
-                var model = ModelBounds(doc);
-                var step = Math.Max(model.Diagonal.X, 1) * 1.25;
-                AddResult(scene, doc, Array.Empty<DiffEntry>(), baseline, geometry, Transform.Identity, hide: true);
-                scene.Labels.Add(new PreviewLabel(atName, Above(model, 0), Color.FromArgb(40, 40, 40), 16));
-                for (var i = 0; i < options.Count; i++)
-                {
-                    var shift = Transform.Translation(step * (i + 1), 0, 0);
-                    var changed = options[i].Preview.Changes.Select(c => c.Id).Concat(baseline.Select(c => c.Id)).ToHashSet(StringComparer.Ordinal);
-                    foreach (var obj in doc.Objects.GetObjectList(new Rhino.DocObjects.ObjectEnumeratorSettings { NormalObjects = true, LockedObjects = true, HiddenObjects = false }))
-                        if (!changed.Contains(obj.Id.ToString("D"))) scene.Copies.Add((obj.Id, shift));
-                    AddResult(scene, doc, options[i].Preview.Changes, baseline, geometry, shift, hide: false);
-                    scene.Labels.Add(new PreviewLabel(options[i].Name, Above(model, step * (i + 1)), Color.FromArgb(40, 40, 40), 16));
-                }
-
-                hud.Add($"{options.Count} options side by side, {atName} first");
-                hud.AddRange(options.Select(o => o.Name + ": " + Counts(o.Preview)));
-                break;
-            }
         }
 
-        hud.Add("Green added, red removed, blue modified.");
+        if (focus is not null)
+            hud.Add($"{PreviewConduit.Swatch(ClashColor)}On the layers both branches created {PreviewConduit.Swatch(NeutralColor)}The branch's other changes");
         scene.Hud = hud;
         return scene;
     }
 
     private static string Counts(MergePreviewResponse preview) =>
-        $"+{preview.Incoming.Added} ~{preview.Incoming.Modified} -{preview.Incoming.Deleted}" +
-        (preview.Conflicts.Count > 0 ? $", {preview.Conflicts.Count} conflicts (shown as on the target)" : "");
+        Legend(preview.Incoming.Added, preview.Incoming.Modified, preview.Incoming.Deleted) +
+        (preview.Conflicts.Count > 0 ? $"  ·  {preview.Conflicts.Count} conflicts (shown as on the target)" : "");
 
     // =========================================================================================
     // Scenes
@@ -454,9 +475,13 @@ public sealed partial class GeometrySync
     /// With <paramref name="hide"/> the document objects being replaced are culled; otherwise everything is drawn
     /// with <paramref name="shift"/> as a separate copy.
     /// </summary>
+    /// <param name="focus">
+    /// When set, objects on these layers are drawn amber and every other coloured change is dimmed grey, so a merge
+    /// problem on a few layers stands out from a branch's other work.
+    /// </param>
     private static void AddResult(
         PreviewScene scene, RhinoDoc doc, IEnumerable<DiffEntry> coloured, IEnumerable<DiffEntry> neutral,
-        IReadOnlyDictionary<string, GeometryBase> geometry, Transform shift, bool hide, bool ghost = false)
+        IReadOnlyDictionary<string, GeometryBase> geometry, Transform shift, bool hide, bool ghost = false, IReadOnlySet<string>? focus = null)
     {
         var done = new HashSet<string>(StringComparer.Ordinal);
         foreach (var change in coloured.Where(c => c.Kind == EntityKinds.Object))
@@ -464,6 +489,17 @@ public sealed partial class GeometrySync
             done.Add(change.Id);
             var id = Guid.Parse(change.Id);
             if (hide) scene.Hidden.Add(id);
+            if (focus is not null)
+            {
+                var manifest = change.ToManifest ?? change.FromManifest;
+                var shape = Geometry(geometry, manifest) ?? doc.Objects.FindId(id)?.Geometry;
+                if (LayerOf(manifest) is { } layer && focus.Contains(layer))
+                    AddShape(scene, shape, Tint(ClashColor, 0.5), ClashColor, change.Change == DiffChanges.Deleted ? GhostTransparency : 0, shift);
+                else
+                    AddShape(scene, shape, NeutralColor, NeutralColor, 0.75, shift, silhouette: false);
+                continue;
+            }
+
             switch (change.Change)
             {
                 case DiffChanges.Added:
@@ -511,6 +547,31 @@ public sealed partial class GeometrySync
         });
     }
 
+    private static string? LayerOf(Manifest? manifest) =>
+        manifest?.Refs.FirstOrDefault(reference => reference.Role == RefRoles.Layer && reference.Kind == EntityKinds.Layer)?.Id;
+
+    /// <summary><paramref name="roots"/> and every layer below them, from the layer entries in <paramref name="changes"/>.</summary>
+    private static HashSet<string> WithSublayers(IEnumerable<string> roots, IEnumerable<DiffEntry> changes)
+    {
+        var parents = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in changes.Where(c => c.Kind == EntityKinds.Layer))
+        {
+            var parent = (change.ToManifest ?? change.FromManifest)?.Refs
+                .FirstOrDefault(reference => reference.Role == RefRoles.Parent && reference.Kind == EntityKinds.Layer)?.Id;
+            if (parent is not null) parents[change.Id] = parent;
+        }
+
+        var layers = new HashSet<string>(roots, StringComparer.OrdinalIgnoreCase);
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var (child, parent) in parents)
+                if (layers.Contains(parent) && layers.Add(child)) grew = true;
+        }
+
+        return layers;
+    }
+
     private static GeometryBase? Geometry(IReadOnlyDictionary<string, GeometryBase> geometry, Manifest? manifest) =>
         manifest?.Components.TryGetValue(DocumentMapper.GeometryComponent, out var hash) == true && geometry.TryGetValue(hash!, out var found) ? found : null;
 
@@ -520,18 +581,6 @@ public sealed partial class GeometrySync
         conduit.Show(scene);
         doc.Views.Redraw();
     }
-
-    private static BoundingBox ModelBounds(RhinoDoc doc)
-    {
-        var box = BoundingBox.Empty;
-        // Annotations are left out: their size follows the view and text scale, not the model.
-        foreach (var obj in doc.Objects.GetObjectList(new Rhino.DocObjects.ObjectEnumeratorSettings { NormalObjects = true, LockedObjects = true }))
-            if (obj.Geometry is { } geometry and not AnnotationBase and not TextDot) box = Union(box, geometry.GetBoundingBox(false));
-        return box.IsValid ? box : new BoundingBox(Point3d.Origin, new Point3d(1, 1, 1));
-    }
-
-    private static Point3d Above(BoundingBox box, double dx) =>
-        new(box.Center.X + dx, box.Max.Y + box.Diagonal.Y * 0.1, box.Max.Z);
 
     private static BoundingBox Union(BoundingBox left, BoundingBox right)
     {

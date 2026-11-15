@@ -5,6 +5,7 @@ import type { Activity, AgentTask, ControlState, Scope, Settings, TaskStatus, Mo
 import { newId } from './protocol/events';
 import { ModelSelect, modelLabel } from './models';
 import { TargetPicker } from './target';
+import { usePersisted } from './persist';
 
 const labels: Record<TaskStatus, string> = { draft: 'Not launched', queued: 'Queued for worker', running: 'Running', stopping: 'Stopping', stopped: 'Stopped', ready: 'Ready for review', failed: 'Failed', interrupted: 'Interrupted' };
 const emptyScope = (): Scope => ({ objectIds: [], layerIds: [] });
@@ -24,8 +25,8 @@ function ActivityList({ entries, activity }: { entries: Activity[]; activity: bo
 }
 export function App({ bridge, branches }: { bridge: Bridge; branches: string[] }) {
   const [state, setState] = useState<ControlState>();
-  const [selected, setSelected] = useState('sessions');
-  const [tab, setTab] = useState<'conversation' | 'activity' | 'scope'>('conversation');
+  const [selected, setSelected] = usePersisted('agents.selected', 'sessions');
+  const [tab, setTab] = usePersisted<'conversation' | 'activity' | 'scope'>('agents.tab', 'conversation');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Task lists start collapsed; this holds the sessions whose list the user opened.
   const [openPlans, setOpenPlans] = useState<Set<string>>(new Set());

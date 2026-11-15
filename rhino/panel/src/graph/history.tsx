@@ -4,6 +4,7 @@ import { Bot, Check, GitMerge, GitPullRequest, Loader2, Tag, User, X } from "luc
 import { cn } from "@/lib/utils";
 import type { AgentTask, GraphCommit } from "../protocol/events";
 import { readyTasks, type Repo } from "../repo";
+import { usePersisted } from "../persist";
 import { hashOf, layoutLanes, shortHash, type Edge, type LaneRow } from "./lanes";
 
 const ROW = 30;
@@ -40,7 +41,11 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
   const { history, control, idle, requestedRepo, ready, message } = repo;
   const layout = useMemo(() => layoutLanes(history.commits), [history.commits]);
   const gutter = PAD * 2 + Math.max(1, layout.width - 1) * LANE;
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = usePersisted("graph.selected", "");
+  // The branch whose tip was last brought into view, so re-sending the same branch (Rhino does after a reload)
+  // does not move the selection.
+  const [shownBranch, setShownBranch] = usePersisted("graph.shownBranch", "");
+  const [scrollTop, setScrollTop] = usePersisted("graph.scroll", 0);
   const listRef = useRef<HTMLDivElement>(null);
 
   const tasks = control?.tasks ?? [];
@@ -55,12 +60,22 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
   // Picking a branch in the header brings its tip into view and selects it.
   const branchName = repo.branch.trim();
   useEffect(() => {
+    if (branchName === shownBranch) return;
     const tip = history.commits.find((commit) => commit.refs?.includes(branchName));
     if (!tip) return;
+    setShownBranch(branchName);
     setSelected(tip.id);
     listRef.current?.querySelector(`[data-branch="${CSS.escape(branchName)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchName]);
+
+  // After a reload the list comes back where it was once its rows exist.
+  const rowCount = layout.rows.length;
+  useEffect(() => {
+    const list = listRef.current;
+    if (list && rowCount > 0 && Math.abs(list.scrollTop - scrollTop) > 1) list.scrollTop = scrollTop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowCount]);
 
   useEffect(() => {
     if (focus === 0) return;
@@ -83,7 +98,7 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
   const headBranch = repo.branch.trim();
 
   return (
-    <div ref={listRef} className="h-full overflow-auto" role="tree" aria-label="History">
+    <div ref={listRef} className="h-full overflow-auto" role="tree" aria-label="History" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
       <div className="min-w-max pb-6">
         <WipRow repo={repo} gutter={gutter} next={pending.length === 0 && layout.rows.length === 0} />
         {pending.map((task, index) => (

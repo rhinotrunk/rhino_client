@@ -99,7 +99,7 @@ export function Header({
         </div>
         <p
           role="status"
-          title={repo.status}
+          title={repo.statusDetail || repo.status}
           className={cn("mb-2 ml-auto flex min-w-0 items-center gap-1.5 truncate text-[12px]", repo.error ? "text-destructive" : "text-muted-foreground")}
         >
           {repo.busy ? <Loader2 size={11} className="shrink-0 animate-spin" /> : null}

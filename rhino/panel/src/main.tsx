@@ -10,6 +10,7 @@ import { SettingsDialog } from './settings';
 import { Prompts } from './prompts';
 import { branchNames } from './target';
 import { createBridge } from './protocol/bridge';
+import { initPersist, usePersisted } from './persist';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing panel root.');
@@ -24,6 +25,8 @@ syncTheme();
 preferredTheme.addEventListener('change', syncTheme);
 
 const bridge = createBridge();
+// Before anything subscribes, so UI state Rhino kept from before a reload is restored first.
+initPersist(bridge);
 function report(message: string) {
   bridge.send({ type: 'panel.error', message: message.slice(0, 4000) });
 }
@@ -46,7 +49,7 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: str
 // Both stay mounted so neither loses state when you switch tabs.
 function Shell() {
   const repo = useRepo(bridge);
-  const [tab, setTab] = useState<TabId>('graph');
+  const [tab, setTab] = usePersisted<TabId>('tab', 'graph');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [focus, setFocus] = useState(0);
   // Rhino answers 'ready' with theme/status/state. If that reply is lost (page loaded before the host was

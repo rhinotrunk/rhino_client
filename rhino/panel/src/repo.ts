@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bridge } from "./protocol/bridge";
+import { usePersisted } from "./persist";
 import type { AgentTask, ControlState, GraphCommit, PanelCommand, UnpushedChoice } from "./protocol/events";
 
 export type History = {
@@ -23,6 +24,7 @@ export function useRepo(bridge: Bridge) {
   const [branch, setBranch] = useState("main");
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState(connected ? "Connecting…" : "Could not connect to Rhino.");
+  const [statusDetail, setStatusDetail] = useState("");
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(true);
   const [ready, setReady] = useState(false);
@@ -39,7 +41,8 @@ export function useRepo(bridge: Bridge) {
   const [newBranch, setNewBranch] = useState("");
   const [conflict, setConflict] = useState<{ id: string; title: string; branch: string; into: string; conflicts: number } | null>(null);
   // Commits picked in the graph, in click order: one previews it in the viewport, two or more pick a merge in Rhino.
-  const [picked, setPicked] = useState<string[]>([]);
+  const [picked, setPicked] = usePersisted<string[]>("graph.picked", []);
+  const previewShown = useRef(false);
   const branchRef = useRef("main");
   const checkoutTarget = useRef<string | undefined>(undefined);
   const [repos, setRepos] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
@@ -90,6 +93,8 @@ export function useRepo(bridge: Bridge) {
         setNewBranch(`${branchRef.current.trim() || "branch"}-${event.commit.replace(/^sha256:/, "").slice(0, 7)}`);
       } else if (event.type === "selection.clear") {
         setPicked([]);
+      } else if (event.type === "preview.shown") {
+        previewShown.current = true;
       } else if (event.type === "head") {
         setHistory((existing) => (existing.repo === event.repo ? { ...existing, head: event.commit ?? "" } : existing));
       } else if (event.type === "status") {
@@ -97,6 +102,7 @@ export function useRepo(bridge: Bridge) {
         setBusy(event.busy);
         setError(event.error);
         setStatus(event.message);
+        setStatusDetail(event.detail ?? "");
       }
     });
   }, [bridge, connected]);
@@ -168,6 +174,7 @@ export function useRepo(bridge: Bridge) {
     setBusy(true);
     setError(false);
     setStatus(text);
+    setStatusDetail("");
   }
 
   branchRef.current = branch;
@@ -188,7 +195,7 @@ export function useRepo(bridge: Bridge) {
     bridge.send({ type: "checkout", ...spec, branch: target, commit, message: message.trim(), unpushed: choice });
   };
   return {
-    bridge, server, repo, branch, message, unpushed, detached, conflict, newBranch, setNewBranch, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
+    bridge, server, repo, branch, message, unpushed, detached, conflict, newBranch, setNewBranch, fresh, status, statusDetail, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
     idle, picked,
     // A plain click previews one commit (clicking it again clears); shift-click adds or removes a commit, and two
     // or more start merge picking in Rhino.
@@ -205,8 +212,9 @@ export function useRepo(bridge: Bridge) {
     },
     // A click away from the graph ends a single-commit preview. Merge picking is changed by clicking its commits.
     clearPreview() {
-      if (picked.length !== 1) return;
-      setPicked([]);
+      if (picked.length !== 1 && !previewShown.current) return;
+      previewShown.current = false;
+      if (picked.length === 1) setPicked([]);
       bridge.send({ type: "commit.preview.clear" });
     },
     // The pointer is on a commit: a good moment to load its preview so the click is immediate.

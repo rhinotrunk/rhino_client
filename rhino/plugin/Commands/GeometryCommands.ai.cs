@@ -88,7 +88,7 @@ public sealed class RhinoClientCompareCommand : Command
         if (!SyncCommands.TryReadTarget(doc, out var target)) return Result.Failure;
         var options = "";
         var at = "main";
-        var modes = new[] { "Cycle", "Overlay", "Side" };
+        var modes = new[] { "Cycle", "Overlay" };
         var modeIndex = 0;
         var get = new GetOption();
         get.AcceptNothing(true);

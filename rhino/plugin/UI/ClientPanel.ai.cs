@@ -30,6 +30,12 @@ public sealed class ClientPanel : Panel
     private bool _disposed;
     private string _busyMessage = "Working…";
 
+    // Rhino can reload the panel's web page (and recreate the panel) when it is re-docked or loses its host window,
+    // which would bring the UI back fresh. The page's own state (tab, selection, open session) and the last status
+    // line are kept here per document and handed back when the page says it is ready again.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, string> UiStates = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, (string Message, bool Error, string Detail)> LastStatus = new();
+
     public uint DocumentSerialNumber => _documentSerialNumber;
 
     public ClientPanel() : this(0) { }
@@ -71,9 +77,17 @@ public sealed class ClientPanel : Panel
             {
                 case "ready":
                     SendTheme();
+                    if (UiStates.TryGetValue(_documentSerialNumber, out var saved))
+                        _bridge.Post(new { type = "ui.state", state = System.Text.Json.Nodes.JsonNode.Parse(saved) });
                     SendSession();
-                    SendStatus(_busy ? _busyMessage : "Connected to Rhino", false, _busy);
+                    if (_busy) SendStatus(_busyMessage, false, true);
+                    else if (LastStatus.TryGetValue(_documentSerialNumber, out var last)) SendStatus(last.Message, last.Error, false, last.Detail);
+                    else SendStatus("Connected to Rhino", false, false);
                     await _control.Command(command);
+                    break;
+                case "ui.save":
+                    if (command.TryGetProperty("state", out var state) && state.ValueKind == JsonValueKind.Object)
+                        UiStates[_documentSerialNumber] = state.GetRawText();
                     break;
                 case "repos":
                     _ = SendRepos(Text(command, "server"));
@@ -205,6 +219,7 @@ public sealed class ClientPanel : Panel
                 _control.FinishMerge(id, result.Ok, result.Message, branch);
                 if (result.Conflicts > 0)
                     _bridge.Post(new { type = "merge.conflict", id, title = request.Title, branch, into = request.Into ?? into, conflicts = result.Conflicts });
+                else if (result.Compare is not null) ShowComparison(result);
                 else if (!result.Ok) _bridge.Post(new { type = "control.error", message = result.Message });
             }
             catch (Exception ex)
@@ -232,6 +247,33 @@ public sealed class ClientPanel : Panel
 
         if (result.Conflicts > 0)
             Post(new { type = "merge.conflict", id = "", title = theirs, branch = theirs, into, conflicts = result.Conflicts });
+        else if (result.Compare is not null)
+            RhinoApp.InvokeOnUiThread(() => ShowComparison(result));
+    }
+
+    // A merge the server would refuse because the merged model breaks (two layers with one name, for example):
+    // show the incoming branch's changes in the viewport, with the objects on the clashing layers picked out, then
+    // put the merge's message back in the status line, which the compare run replaced with its own summary.
+    private async void ShowComparison(SyncResult result)
+    {
+        if (result.Compare is not { } compare || _closed) return;
+        RhinoApp.WriteLine("RhinoClient: " + compare.Explanation);
+        SyncResult shown;
+        try
+        {
+            var target = _sync.ReadTarget();
+            shown = await RunAsync("Showing the clash…", token => _sync.CompareAsync(
+                target, compare.Branches, compare.At, CompareMode.Cycle, interactive: false, token,
+                focusLayers: compare.FocusLayers, clearHint: "click away from the graph to clear it"));
+        }
+        catch (Exception ex)
+        {
+            shown = SyncResult.Fail(ex.Message);
+        }
+
+        if (shown.Ok) Post(new { type = "preview.shown" });
+        else RhinoApp.WriteLine("RhinoClient: could not show the comparison (" + shown.Message + ").");
+        SendStatus(result.Message, false, _busy, compare.Explanation);
     }
 
     // Opens a pull request for a finished task: its result goes onto its own agent branch and waits for review.
@@ -466,13 +508,15 @@ public sealed class ClientPanel : Panel
         });
     }
 
-    private void SendStatus(string message, bool error, bool busy)
+    /// <param name="detail">A longer explanation for the status tooltip; the header shows <paramref name="message"/>.</param>
+    private void SendStatus(string message, bool error, bool busy, string? detail = null)
     {
+        if (!busy) LastStatus[_documentSerialNumber] = (message, error, detail ?? "");
         if (_closed) return;
         RhinoApp.InvokeOnUiThread(() =>
         {
             if (_closed) return;
-            _bridge.Post(new { type = "status", message, error, busy });
+            _bridge.Post(new { type = "status", message, error, busy, detail = detail ?? "" });
         });
     }
 

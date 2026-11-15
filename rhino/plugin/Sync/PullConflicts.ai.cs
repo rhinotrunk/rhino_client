@@ -141,9 +141,11 @@ internal static class PullConflicts
 
     private static string[] Hud(ObjectConflict conflict, int index, int count, bool incomingSolid)
     {
+        var incoming = PreviewConduit.Swatch(PreviewConduit.IncomingOutline);
+        var existing = PreviewConduit.Swatch(PreviewConduit.ExistingOutline);
         var which = incomingSolid
-            ? "Incoming is solid blue. The document object is ghosted amber."
-            : "The document object is solid amber. Incoming is ghosted blue.";
+            ? $"{incoming}Incoming (solid) {existing}Your object (ghosted)"
+            : $"{existing}Your object (solid) {incoming}Incoming (ghosted)";
         var what = conflict.IncomingDeleted
             ? "The incoming commit deletes this object; you changed it."
             : conflict.Deleted

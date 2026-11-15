@@ -28,6 +28,8 @@ export type ControlState = {
 export type PanelCommand =
   | { type: 'ready' | 'scope.selection' | 'preview.clear' }
   | { type: 'panel.error'; message: string }
+  // UI state Rhino keeps for this document and hands back (as 'ui.state') if the page is reloaded.
+  | { type: 'ui.save'; state: Record<string, unknown> }
   | { type: 'settings.save' } & Settings
   | { type: 'session.create'; id: string; title?: string; prompt: string; scope: Scope; model?: string }
   | { type: 'session.model'; id: string; model: string }
@@ -59,7 +61,8 @@ export type HostEvent =
   | { type: 'repos'; server: string; repos: string[]; message: string; error: boolean }
   | { type: 'branches'; server: string; repo: string; branches: string[]; message: string; error: boolean }
   | { type: 'graph'; repo: string; head?: string; commits: GraphCommit[]; truncated: boolean; message: string; error: boolean }
-  | { type: 'status'; message: string; error: boolean; busy: boolean }
+  // detail: a longer explanation for the status tooltip, when the message is a summary.
+  | { type: 'status'; message: string; error: boolean; busy: boolean; detail?: string }
   | { type: 'merge.conflict'; id: string; title: string; branch: string; into: string; conflicts: number }
   | { type: 'checkout.unpushed'; commit: string; changes: number }
   // A push stopped because the model's base commit is not the branch tip. The panel offers another branch.
@@ -68,7 +71,11 @@ export type HostEvent =
   | { type: 'head'; repo: string; branch: string; commit: string | null }
   | { type: 'theme'; scheme: 'light' | 'dark' }
   // The viewport preview was discarded (a pull, push, checkout or merge started), so the graph selection goes too.
-  | { type: 'selection.clear' };
+  | { type: 'selection.clear' }
+  // The host put a preview on screen that no graph selection asked for (a merge comparison); a click away clears it.
+  | { type: 'preview.shown' }
+  // UI state saved with 'ui.save' before the page was reloaded.
+  | { type: 'ui.state'; state: Record<string, unknown> };
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;

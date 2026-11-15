@@ -147,6 +147,12 @@ internal static partial class DocumentMapper
             case EntityKinds.Linetype:
             {
                 var index = LinetypeIndex(doc, id);
+                // A deleted linetype keeps its id in the table; restore it rather than add a second one with that id.
+                if (index < 0)
+                {
+                    var dead = LinetypeIndex(doc, id, includeDeleted: true);
+                    if (dead >= 0 && doc.Linetypes.Undelete(dead)) index = dead;
+                }
                 var linetype = index >= 0 ? doc.Linetypes[index] : new Linetype { Id = id };
                 linetype.Name = ReadString(attributes, "name");
                 while (linetype.SegmentCount > 0) linetype.RemoveSegment(linetype.SegmentCount - 1);
@@ -197,10 +203,10 @@ internal static partial class DocumentMapper
         return -1;
     }
 
-    private static int LinetypeIndex(RhinoDoc doc, Guid id)
+    private static int LinetypeIndex(RhinoDoc doc, Guid id, bool includeDeleted = false)
     {
         for (var i = 0; i < doc.Linetypes.Count; i++)
-            if (doc.Linetypes[i].Id == id && !doc.Linetypes[i].IsDeleted) return i;
+            if (doc.Linetypes[i].Id == id && (includeDeleted || !doc.Linetypes[i].IsDeleted)) return i;
         return -1;
     }
 

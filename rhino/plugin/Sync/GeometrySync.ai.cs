@@ -23,15 +23,30 @@ public sealed record SyncResult(bool Ok, string Message)
     /// <summary>Objects both sides of a merge changed incompatibly. The caller asks which side to keep.</summary>
     public int Conflicts { get; init; }
 
+    /// <summary>
+    /// A merge that stopped because the merged model would break (for example both branches created a layer with the
+    /// same name). The caller shows the incoming branch's changes with RhinoClientCompare so the user can see why.
+    /// </summary>
+    public MergeComparison? Compare { get; init; }
+
     /// <summary>Stopped to ask the user something rather than failed.</summary>
-    public bool Asking => Unpushed > 0 || Detached is not null || Conflicts > 0;
+    public bool Asking => Unpushed > 0 || Detached is not null || Conflicts > 0 || Compare is not null;
 
     public static SyncResult Success(string message) => new(true, message);
     public static SyncResult Fail(string message) => new(false, message);
     public static SyncResult Stopped(int unpushed, string message) => new(false, message) { Unpushed = unpushed };
     public static SyncResult Conflicted(int conflicts, string message) => new(false, message) { Conflicts = conflicts };
     public static SyncResult OffTip(string commit, string message) => new(false, message) { Detached = commit };
+    public static SyncResult Blocked(MergeComparison compare, string message) => new(false, message) { Compare = compare };
 }
+
+/// <summary>
+/// Branches to compare as they would land on <paramref name="At"/> (their merge base); the first is shown.
+/// <paramref name="FocusLayers"/> are the layers the merge trips over: objects on them, or on their sublayers, are
+/// picked out and the rest of the branch's changes are dimmed. <paramref name="Explanation"/> is the full story
+/// behind the result's short message.
+/// </summary>
+public sealed record MergeComparison(string At, IReadOnlyList<string> Branches, IReadOnlyCollection<string> FocusLayers, string Explanation);
 
 /// <summary>What a checkout does with changes that have not been pushed. Checkout replaces the model, so they would be lost.</summary>
 public enum UnpushedChoice
@@ -355,7 +370,11 @@ public sealed partial class GeometrySync : IDisposable
                 return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
         }
 
-        var request = new MergeRequest { Branch = into, ExpectedHead = remote.Commit, Theirs = theirs, Message = $"Merge branch '{theirs}' into {into}", Author = Author() };
+        var check = await CheckMergeAsync(client, bound.Repo, into, remote.Commit, theirs, theirs, cancellationToken).ConfigureAwait(false);
+        if (check.Blocked is { } blocked) return blocked;
+        var note = check.Note;
+
+        var request = new MergeRequest { Branch = into, ExpectedHead = check.Head, Theirs = theirs, Message = $"Merge branch '{theirs}' into {into}", Author = Author() };
         MergeResponse merged;
         try
         {
@@ -386,13 +405,13 @@ public sealed partial class GeometrySync : IDisposable
         }
 
         if (string.Equals(merged.Status, "upToDate", StringComparison.OrdinalIgnoreCase))
-            return SyncResult.Success($"'{into}' already contains '{theirs}'. Nothing to merge.");
+            return SyncResult.Success(note + $"'{into}' already contains '{theirs}'. Nothing to merge.");
         if (!intoModel)
-            return SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). The model stays on {bound.Branch}.");
+            return SyncResult.Success(note + $"Merged '{theirs}' into {into} ({merged.Commit}). The model stays on {bound.Branch}.");
         var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, discardLocal: true).ConfigureAwait(false);
         return pulled.Ok
-            ? SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). {pulled.Message}")
-            : SyncResult.Fail($"Merged '{theirs}' into {into} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+            ? SyncResult.Success(note + $"Merged '{theirs}' into {into} ({merged.Commit}). {pulled.Message}")
+            : SyncResult.Fail(note + $"Merged '{theirs}' into {into} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
     }
 
     private async Task<SyncResult> MergeTaskCore(SyncTarget target, TaskMergeRequest task, CancellationToken cancellationToken)
@@ -428,12 +447,16 @@ public sealed partial class GeometrySync : IDisposable
         var published = await PublishTaskBranchAsync(client, bound, task, branch, cancellationToken).ConfigureAwait(false);
         if (published.Failure is not null) return published.Failure;
         var changeNote = published.ChangeNote;
+        var check = await CheckMergeAsync(client, bound.Repo, into, remote.Commit, branch, task.Title, cancellationToken).ConfigureAwait(false);
+        if (check.Blocked is { } blocked)
+            return blocked with { Message = blocked.Message + " The task's result is kept on " + branch + "." };
+        var layerNote = check.Note;
 
         MergeResponse merged;
         var request = new MergeRequest
         {
             Branch = into,
-            ExpectedHead = remote.Commit,
+            ExpectedHead = check.Head,
             Theirs = branch,
             Message = "Merge agent task: " + task.Title,
             Author = Author(),
@@ -471,12 +494,12 @@ public sealed partial class GeometrySync : IDisposable
         }
 
         if (!intoModel)
-            return SyncResult.Success($"Merged '{task.Title}'{changeNote} into {into} via {branch} ({merged.Commit}). The model stays on {bound.Branch}.");
+            return SyncResult.Success(layerNote + $"Merged '{task.Title}'{changeNote} into {into} via {branch} ({merged.Commit}). The model stays on {bound.Branch}.");
         // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
         var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, discardLocal: true).ConfigureAwait(false);
         return pulled.Ok
-            ? SyncResult.Success($"Merged '{task.Title}'{changeNote} into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
-            : SyncResult.Fail($"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+            ? SyncResult.Success(layerNote + $"Merged '{task.Title}'{changeNote} into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
+            : SyncResult.Fail(layerNote + $"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
     }
 
     /// <summary>Conflicts and invariant violations of a merge preview, in words.</summary>
@@ -486,9 +509,108 @@ public sealed partial class GeometrySync : IDisposable
         if (preview.Conflicts.Count > 0)
             parts.Add($"{preview.Conflicts.Count} objects or layers were changed on both sides ({string.Join(", ", preview.Conflicts.Take(5).Select(c => c.Kind + " " + c.Id[..Math.Min(8, c.Id.Length)]))})");
         if (preview.Validation.Count > 0)
-            parts.Add("the result would break the model: " + string.Join("; ", preview.Validation.Take(3).Select(v => v.Message)));
+            parts.Add("the result would break the model: " + DescribeValidation(preview.Validation).TrimEnd('.'));
         return parts.Count == 0 ? "the server refused it." : string.Join("; ", parts) + ".";
     }
+
+    /// <summary>
+    /// Invariant violations of a merged snapshot, in words a modeller can act on. The common case is two branches
+    /// that each created a layer with the same name: Rhino gave each its own id, so the merge would hold both.
+    /// </summary>
+    internal static string DescribeValidation(IReadOnlyList<ApiErrorDetail> validation)
+    {
+        var parts = new List<string>();
+        var duplicates = DuplicateLayerNames(validation);
+        if (duplicates.Count > 0)
+            parts.Add($"both branches created {(duplicates.Count == 1 ? "a layer" : "layers")} named {Quoted(duplicates)} separately, " +
+                "so the merged model would have two layers with " + (duplicates.Count == 1 ? "that name" : "each of those names"));
+        parts.AddRange(validation
+            .Where(issue => issue.Code != "duplicate_layer_name")
+            .Select(issue => issue.Message.TrimEnd('.'))
+            .Distinct(StringComparer.Ordinal)
+            .Take(3));
+        if (parts.Count == 0) return "the merged model would not be valid.";
+        var text = string.Join("; ", parts) + ".";
+        return char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
+    private static string Quoted(IReadOnlyList<string> names) => names.Count switch
+    {
+        1 => $"'{names[0]}'",
+        <= 5 => string.Join(", ", names.Take(names.Count - 1).Select(n => $"'{n}'")) + $" and '{names[^1]}'",
+        _ => string.Join(", ", names.Take(4).Select(n => $"'{n}'")) + $" and {names.Count - 4} more",
+    };
+
+    /// <summary>
+    /// Whether a merge may go ahead. <paramref name="Head"/> is the target branch's head to merge onto, which moves when
+    /// layers were taken over first; <paramref name="Note"/> says so, for the merge's message.
+    /// </summary>
+    private sealed record MergeCheck(SyncResult? Blocked, string Head, string Note);
+
+    /// <summary>
+    /// Previews merging <paramref name="theirs"/> into <paramref name="into"/> (at <paramref name="intoHead"/>). Layers both
+    /// branches created separately at the same path are unified first: <paramref name="into"/> takes over their ids
+    /// from <paramref name="theirs"/> in one commit (<see cref="AdoptLayersAsync"/>). When the merged model would
+    /// still break, the result stops the merge and names the branches to compare. Conflicts are not checked here: the
+    /// merge itself reports them and the panel asks which side wins.
+    /// </summary>
+    private async Task<MergeCheck> CheckMergeAsync(
+        RhinoTrunkClient client, string repo, string into, string intoHead, string theirs, string label, CancellationToken cancellationToken)
+    {
+        Task<MergePreviewResponse> Preview() => client.PreviewMergeAsync(repo, new MergePreviewRequest
+        {
+            Branch = into,
+            Theirs = theirs,
+            Author = Author(),
+            NoFastForward = true,
+        }, cancellationToken);
+
+        var preview = await Preview().ConfigureAwait(false);
+        if (preview.Validation.Count == 0) return new(null, intoHead, "");
+
+        var note = "";
+        if (preview.Validation.Any(issue => issue.Code == "duplicate_layer_name")
+            && await AdoptLayersAsync(client, repo, into, intoHead, theirs, $"'{label}'", cancellationToken).ConfigureAwait(false) is { } adopted)
+        {
+            intoHead = adopted.Commit;
+            note = $"'{into}' took over {(adopted.Paths.Count == 1 ? "the layer" : $"{adopted.Paths.Count} layers")} {Quoted(adopted.Paths)} from '{label}' first, " +
+                "since both branches had created them separately. ";
+            preview = await Preview().ConfigureAwait(false);
+            if (preview.Validation.Count == 0) return new(null, intoHead, note);
+        }
+
+        var explanation =
+            note + $"Cannot merge '{label}' into '{into}'. {DescribeValidation(preview.Validation)} " +
+            $"The viewport shows what '{label}' changes since the branches split, with the objects on those layers in amber " +
+            "(click away from the graph to clear it). Rename or remove the layers on one branch, push, and merge again.";
+        var focus = preview.Validation
+            .Where(issue => issue.Kind == EntityKinds.Layer && !string.IsNullOrEmpty(issue.Id))
+            .Select(issue => issue.Id!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The incoming branch first: the model is usually on the target, so its changes are the ones not yet on screen.
+        var compare = new MergeComparison(preview.MergeBase ?? preview.Ours, new[] { theirs, into }, focus, explanation);
+        return new(SyncResult.Blocked(compare, $"Can't merge '{label}' into '{into}': {ShortValidation(preview.Validation)}"), intoHead, note);
+    }
+
+    /// <summary>One line for the panel header; <see cref="DescribeValidation"/> is the full version.</summary>
+    private static string ShortValidation(IReadOnlyList<ApiErrorDetail> validation)
+    {
+        var duplicates = DuplicateLayerNames(validation);
+        if (duplicates.Count == 0) return "the merged model would not be valid.";
+        var shown = duplicates.Count <= 2
+            ? string.Join(" and ", duplicates)
+            : string.Join(", ", duplicates.Take(2)) + $"… ({duplicates.Count - 2} more)";
+        return $"both branches created layer{(duplicates.Count == 1 ? "" : "s")} {shown} separately.";
+    }
+
+    private static List<string> DuplicateLayerNames(IReadOnlyList<ApiErrorDetail> validation) => validation
+        .Where(issue => issue.Code == "duplicate_layer_name")
+        .Select(issue => System.Text.RegularExpressions.Regex.Match(issue.Message, "'([^']+)'"))
+        .Where(match => match.Success)
+        .Select(match => match.Groups[1].Value)
+        .Distinct(StringComparer.Ordinal)
+        .Order(StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     // "1 added, 0 changed" style summary so it is obvious the task's commit holds only its own changes.
     private static string Describe(IReadOnlyCollection<Change> changes)
