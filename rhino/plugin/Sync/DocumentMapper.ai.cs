@@ -133,27 +133,14 @@ internal static class DocumentMapper
         if (layers < 1) throw new SyncException("The commit has no layers.");
     }
 
-    /// <summary>
-    /// Applies a commit to the document. Objects that already exist are updated in place (same id) and new ones
-    /// are added. With <paramref name="removeUnlisted"/> the document is made to match the commit: model objects
-    /// the commit does not list are deleted. Only pass it when the document has no unpushed edits.
-    /// </summary>
-    internal static Dictionary<string, uint> Apply(
-        RhinoDoc doc, IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs, bool removeUnlisted = false)
+    internal static List<DecodedObject> DecodeObjects(IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs)
     {
-        //if (ModelObjectCount(doc) > 0)
-        //    throw new SyncException("Pull replaces the document and only runs when it has no model objects.");
-
-        var settings = entities.Single(entity => entity.Kind == EntityKinds.Settings);
-        var layers = ParentsFirst(entities.Where(entity => entity.Kind == EntityKinds.Layer).ToList());
-        var objects = entities.Where(entity => entity.Kind == EntityKinds.Object).ToList();
-        var settingsAttributes = RequireAttributes(settings, blobs);
-        var layerAttributes = layers.ToDictionary(layer => layer.Id, layer => RequireAttributes(layer, blobs), StringComparer.Ordinal);
-        var decoded = new List<DecodedObject>(objects.Count);
+        var decoded = new List<DecodedObject>();
         try
         {
-            foreach (var entity in objects)
+            foreach (var entity in entities)
             {
+                if (entity.Kind != EntityKinds.Object) continue;
                 var attributes = RequireAttributes(entity, blobs);
                 var space = ReadString(attributes, "space", "model");
                 if (!string.Equals(space, "model", StringComparison.Ordinal))
@@ -161,12 +148,32 @@ internal static class DocumentMapper
                 decoded.Add(new DecodedObject(entity, attributes, DecodeGeometry(entity, blobs)));
             }
 
-            return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, decoded, removeUnlisted);
+            return decoded;
         }
-        finally
+        catch
         {
             foreach (var item in decoded) item.Geometry.Dispose();
+            throw;
         }
+    }
+
+    /// <param name="removeUnlisted">
+    /// Also delete model objects the commit does not list, so the document matches the commit. Only pass it
+    /// when the document has no unpushed edits (a merged agent task).
+    /// </param>
+    internal static Dictionary<string, uint> Apply(
+        RhinoDoc doc,
+        IReadOnlyList<EntityVersion> entities,
+        IReadOnlyDictionary<string, byte[]> blobs,
+        IReadOnlyList<DecodedObject> objects,
+        IReadOnlyDictionary<string, ConflictChoice> resolutions,
+        bool removeUnlisted = false)
+    {
+        var settings = entities.Single(entity => entity.Kind == EntityKinds.Settings);
+        var layers = ParentsFirst(entities.Where(entity => entity.Kind == EntityKinds.Layer).ToList());
+        var settingsAttributes = RequireAttributes(settings, blobs);
+        var layerAttributes = layers.ToDictionary(layer => layer.Id, layer => RequireAttributes(layer, blobs), StringComparer.Ordinal);
+        return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, objects, resolutions, removeUnlisted);
     }
 
     private static Dictionary<string, uint> ApplyPrepared(
@@ -174,7 +181,8 @@ internal static class DocumentMapper
         JsonObject settingsAttributes,
         IReadOnlyList<EntityVersion> layers,
         Dictionary<string, JsonObject> layerAttributes,
-        List<DecodedObject> objects,
+        IReadOnlyList<DecodedObject> objects,
+        IReadOnlyDictionary<string, ConflictChoice> resolutions,
         bool removeUnlisted)
     {
         var redraw = doc.Views.RedrawEnabled;
@@ -195,16 +203,20 @@ internal static class DocumentMapper
             DeleteExtraLayers(doc, keep);
             if (removeUnlisted)
             {
-                var listed = new HashSet<Guid>(objects.Select(item => ParseGuid(item.Entity.Id, "object")));
+                var listed = new HashSet<Guid>(objects.Select(item => ParseObjectId(item.Entity.Id)));
                 var extras = doc.Objects.GetObjectList(ModelSettings())
                     .Where(obj => obj.Attributes.Space == ActiveSpace.ModelSpace && !ShouldSkip(obj) && !listed.Contains(obj.Id))
                     .ToList();
                 foreach (var extra in extras) doc.Objects.Delete(extra, true);
             }
 
+            var deleted = DeletedModelObjects(doc);
             var serials = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var item in objects)
-                serials[item.Entity.Id] = AddObject(doc, item);
+            {
+                ConflictChoice? choice = resolutions.TryGetValue(item.Entity.Id, out var selected) ? selected : null;
+                PlaceObject(doc, item, choice, deleted, serials);
+            }
             if (undo != 0) doc.EndUndoRecord(undo);
             return serials;
         }
@@ -458,9 +470,142 @@ internal static class DocumentMapper
         return false;
     }
 
-    private static uint AddObject(RhinoDoc doc, DecodedObject item)
+    internal static Guid ParseObjectId(string id) => ParseGuid(id, "object");
+
+    internal static Dictionary<Guid, RhinoObject> DeletedModelObjects(RhinoDoc doc)
     {
-        var id = ParseGuid(item.Entity.Id, "object");
+        var settings = new ObjectEnumeratorSettings
+        {
+            DeletedObjects = true,
+            NormalObjects = false,
+            LockedObjects = false,
+            HiddenObjects = false,
+            ActiveObjects = false,
+            IdefObjects = false,
+            ReferenceObjects = false,
+            IncludeLights = false,
+            IncludeGrips = false,
+            IncludePhantoms = false,
+        };
+        var map = new Dictionary<Guid, RhinoObject>();
+        foreach (var obj in doc.Objects.GetObjectList(settings))
+        {
+            if (obj.IsDeleted && obj.Attributes.Space == ActiveSpace.ModelSpace)
+                map[obj.Id] = obj;
+        }
+
+        return map;
+    }
+
+    internal static bool ContentMatches(RhinoDoc doc, RhinoObject obj, DecodedObject item)
+    {
+        var geometry = obj.Geometry;
+        if (geometry is null || !GeometryBase.GeometryEquals(geometry, item.Geometry)) return false;
+        return AttributesMatch(doc, obj.Attributes, item);
+    }
+
+    private static void PlaceObject(
+        RhinoDoc doc,
+        DecodedObject item,
+        ConflictChoice? choice,
+        Dictionary<Guid, RhinoObject> deleted,
+        Dictionary<string, uint> serials)
+    {
+        var id = ParseObjectId(item.Entity.Id);
+        if (choice == ConflictChoice.KeepExisting) return;
+        if (choice == ConflictChoice.Merge)
+        {
+            AddObject(doc, item, Guid.NewGuid(), merged: true);
+            return;
+        }
+
+        var live = doc.Objects.FindId(id);
+        if (live is null && deleted.TryGetValue(id, out var dead))
+        {
+            var restore = choice == ConflictChoice.KeepIncoming || (choice is null && ContentMatches(doc, dead, item));
+            if (!restore)
+                throw new SyncException($"Object {item.Entity.Id} differs and was not reviewed.");
+            if (!doc.Objects.Undelete(dead))
+                throw new SyncException($"Could not restore object {item.Entity.Id}.");
+            live = doc.Objects.FindId(id) ?? throw new SyncException($"Rhino did not keep the id for object {item.Entity.Id}.");
+            if (choice is null)
+            {
+                serials[item.Entity.Id] = live.RuntimeSerialNumber;
+                return;
+            }
+        }
+
+        if (live is not null)
+        {
+            if (choice is null)
+            {
+                if (!ContentMatches(doc, live, item))
+                    throw new SyncException($"Object {item.Entity.Id} differs and was not reviewed.");
+                serials[item.Entity.Id] = live.RuntimeSerialNumber;
+                return;
+            }
+
+            if (!doc.Objects.Replace(id, item.Geometry, true))
+                throw new SyncException($"Could not replace object {item.Entity.Id}.");
+            if (!doc.Objects.ModifyAttributes(id, BuildAttributes(doc, item, id), true))
+                throw new SyncException($"Could not update object {item.Entity.Id}.");
+            var updated = doc.Objects.FindId(id) ?? throw new SyncException($"Rhino did not keep the id for object {item.Entity.Id}.");
+            serials[item.Entity.Id] = updated.RuntimeSerialNumber;
+            return;
+        }
+
+        serials[item.Entity.Id] = AddObject(doc, item, id, merged: false);
+    }
+
+    private static bool AttributesMatch(RhinoDoc doc, ObjectAttributes attributes, DecodedObject item)
+    {
+        var layerRef = item.Entity.Manifest?.Refs.FirstOrDefault(reference =>
+            reference.Role == RefRoles.Layer && reference.Kind == EntityKinds.Layer);
+        if (layerRef is null) return false;
+        var layerId = ParseGuid(layerRef.Id, "layer");
+        var layer = doc.Layers.FindIndex(attributes.LayerIndex);
+        if (layer is null || layer.IsDeleted || layer.Id != layerId) return false;
+        if (!string.Equals(attributes.Name ?? "", ReadString(item.Attributes, "name"), StringComparison.Ordinal)) return false;
+        if (attributes.ColorSource != ParseColorSource(ReadString(item.Attributes, "colorSource", "layer"))) return false;
+        if (attributes.ObjectColor.ToArgb() != ParseColor(ReadString(item.Attributes, "color", "#000000")).ToArgb()) return false;
+        if (attributes.MaterialSource != ParseMaterialSource(ReadString(item.Attributes, "materialSource", "layer"))) return false;
+        if (attributes.LinetypeSource != ParseLinetypeSource(ReadString(item.Attributes, "linetypeSource", "layer"))) return false;
+        if (attributes.PlotColorSource != ParsePlotColorSource(ReadString(item.Attributes, "plotColorSource", "layer"))) return false;
+        if (attributes.PlotWeightSource != ParsePlotWeightSource(ReadString(item.Attributes, "plotWeightSource", "layer"))) return false;
+        if (attributes.Visible != ReadBool(item.Attributes, "visible", true)) return false;
+        if (attributes.Mode != ParseMode(ReadString(item.Attributes, "mode", "normal"))) return false;
+        if (attributes.DisplayOrder != ReadInt(item.Attributes, "displayOrder", 0)) return false;
+        return UserTextMatches(attributes, ReadObject(item.Attributes, "userText"));
+    }
+
+    private static bool UserTextMatches(ObjectAttributes attributes, JsonObject incoming)
+    {
+        var current = UserText(attributes.GetUserStrings());
+        var expected = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in incoming)
+        {
+            if (pair.Key.StartsWith(WorkingCopy.Prefix, StringComparison.Ordinal)) continue;
+            if (pair.Value is not JsonValue value || !value.TryGetValue<string>(out var text)) continue;
+            expected[pair.Key] = text;
+        }
+
+        foreach (var pair in expected)
+        {
+            if (current[pair.Key] is not JsonValue value || !value.TryGetValue<string>(out var text) || text != pair.Value)
+                return false;
+        }
+
+        foreach (var pair in current)
+        {
+            if (pair.Key.StartsWith(WorkingCopy.Prefix, StringComparison.Ordinal)) continue;
+            if (!expected.ContainsKey(pair.Key)) return false;
+        }
+
+        return true;
+    }
+
+    private static ObjectAttributes BuildAttributes(RhinoDoc doc, DecodedObject item, Guid objectId)
+    {
         var layerRef = item.Entity.Manifest?.Refs.FirstOrDefault(reference =>
             reference.Role == RefRoles.Layer && reference.Kind == EntityKinds.Layer);
         if (layerRef is null) throw new SyncException($"Object {item.Entity.Id} has no layer.");
@@ -471,7 +616,7 @@ internal static class DocumentMapper
 
         var attributes = new ObjectAttributes
         {
-            ObjectId = id,
+            ObjectId = objectId,
             LayerIndex = layerIndex,
             Name = ReadString(item.Attributes, "name"),
             ColorSource = ParseColorSource(ReadString(item.Attributes, "colorSource", "layer")),
@@ -487,20 +632,16 @@ internal static class DocumentMapper
         };
         if (string.IsNullOrEmpty(attributes.Name)) attributes.Name = null;
         WriteUserText((key, value) => attributes.SetUserString(key, value), null, ReadObject(item.Attributes, "userText"));
+        return attributes;
+    }
 
-        // An object that is already in the document keeps its id: update it instead of adding a second one.
-        if (doc.Objects.FindId(id) is { } present)
-        {
-            if (!doc.Objects.Replace(present.Id, item.Geometry, true))
-                throw new SyncException($"Rhino could not update object {item.Entity.Id}.");
-            var updated = doc.Objects.FindId(id) ?? throw new SyncException($"Object {item.Entity.Id} was lost while updating.");
-            if (!doc.Objects.ModifyAttributes(updated, attributes, true))
-                updated = doc.Objects.FindId(id) ?? updated;
-            return updated.RuntimeSerialNumber;
-        }
-
-        var added = doc.Objects.Add(item.Geometry, attributes);
-        if (added != id) throw new SyncException($"Rhino did not keep the id for object {item.Entity.Id}.");
+    private static uint AddObject(RhinoDoc doc, DecodedObject item, Guid id, bool merged)
+    {
+        var added = doc.Objects.Add(item.Geometry, BuildAttributes(doc, item, id));
+        if (added != id)
+            throw new SyncException(merged
+                ? $"Rhino did not keep the new id for a merged copy of object {item.Entity.Id}."
+                : $"Rhino did not keep the id for object {item.Entity.Id}.");
         var created = doc.Objects.FindId(id) ?? throw new SyncException($"Object {item.Entity.Id} was not added.");
         return created.RuntimeSerialNumber;
     }

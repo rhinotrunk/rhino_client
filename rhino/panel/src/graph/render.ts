@@ -1,13 +1,25 @@
 import { createGitgraph, templateExtend, TemplateName, type Branch } from "@gitgraph/js";
 import type { GraphCommit } from "../protocol/events";
-import { toStory } from "./story";
+import { graphHash, shortHash, toStory } from "./story";
 
 const font = 'normal 12px -apple-system, "Segoe UI", sans-serif';
+const svgNs = "http://www.w3.org/2000/svg";
 let fitted: MutationObserver | undefined;
+
+type DrawnCommit = {
+  hash: string;
+  message: string;
+  style: { dot: { size: number }; message: { color?: string; font?: string } };
+};
 
 // Leave orientation unset. Gitgraph then draws the last commit at the top,
 // which is the newest one after the oldest-first walk.
-export function renderHistory(container: HTMLElement, commits: readonly GraphCommit[], scheme: "light" | "dark"): void {
+export function renderHistory(
+  container: HTMLElement,
+  commits: readonly GraphCommit[],
+  scheme: "light" | "dark",
+  onCheckout: (id: string) => void,
+): void {
   fitted?.disconnect();
   container.replaceChildren();
   const steps = toStory(commits);
@@ -51,6 +63,7 @@ export function renderHistory(container: HTMLElement, commits: readonly GraphCom
     }),
   });
 
+  const ids = new Map(commits.map((commit) => [graphHash(commit.id), commit.id]));
   const branches = new Map<string, Branch>();
   const open = (name: string): Branch => {
     const existing = branches.get(name);
@@ -64,6 +77,7 @@ export function renderHistory(container: HTMLElement, commits: readonly GraphCom
 
   for (const step of steps) {
     const branch = open(step.branch);
+    const commitId = ids.get(step.hash) ?? "";
     const commitOptions = {
       subject: step.subject,
       hash: step.hash,
@@ -72,6 +86,7 @@ export function renderHistory(container: HTMLElement, commits: readonly GraphCom
       ...(step.kind === "agent"
         ? { style: { dot: { color: scheme === "dark" ? "#d6bcfa" : "#6d28d9" } } }
         : {}),
+      renderMessage: (drawn: DrawnCommit) => commitMessage(drawn, commitId, shortHash(step.hash), onCheckout),
     };
     const merged = step.merges.find((name) => branches.has(name));
     if (merged) branch.merge({ branch: merged, fastForward: false, commitOptions });
@@ -89,10 +104,104 @@ export function renderHistory(container: HTMLElement, commits: readonly GraphCom
   if (!(svg instanceof SVGSVGElement)) return;
   // Gitgraph measures the picture before branch labels are placed, so the
   // text can run past the svg. Grow it to the text once those labels settle.
-  const fit = () => growSvg(svg);
+  const fit = () => {
+    placeCheckouts(svg);
+    growSvg(svg);
+  };
   fitted = new MutationObserver(fit);
   fitted.observe(svg, { subtree: true, childList: true, attributes: true });
   fit();
+}
+
+// The checkout control sits after the message and stays invisible until the
+// pointer is on that commit. Measure once the text has a width, then stop
+// writing attributes so the resize observer can settle.
+function commitMessage(commit: DrawnCommit, commitId: string, label: string, onCheckout: (id: string) => void): SVGGElement {
+  const row = document.createElementNS(svgNs, "g");
+  row.setAttribute("class", "commit-row");
+  row.setAttribute("transform", `translate(0, ${commit.style.dot.size})`);
+  row.setAttribute("data-commit", commit.hash);
+
+  const hit = document.createElementNS(svgNs, "rect");
+  hit.setAttribute("class", "commit-hit");
+  row.appendChild(hit);
+
+  const text = document.createElementNS(svgNs, "text");
+  text.setAttribute("class", "commit-subject");
+  text.setAttribute("alignment-baseline", "central");
+  text.setAttribute("dominant-baseline", "central");
+  text.setAttribute("fill", commit.style.message.color ?? "");
+  text.setAttribute("style", `font: ${commit.style.message.font || font}`);
+  text.textContent = commit.message;
+  row.appendChild(text);
+
+  const action = document.createElementNS(svgNs, "g");
+  action.setAttribute("class", "commit-checkout");
+  action.setAttribute("role", "button");
+  action.setAttribute("tabindex", "0");
+  action.setAttribute("aria-label", `Checkout ${label}`);
+  const button = document.createElementNS(svgNs, "rect");
+  button.setAttribute("height", "18");
+  button.setAttribute("y", "-9");
+  button.setAttribute("rx", "4");
+  const caption = document.createElementNS(svgNs, "text");
+  caption.textContent = "Checkout";
+  caption.setAttribute("y", "0");
+  caption.setAttribute("text-anchor", "middle");
+  caption.setAttribute("dominant-baseline", "central");
+  caption.setAttribute("alignment-baseline", "central");
+  action.append(button, caption);
+  const trigger = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (commitId) onCheckout(commitId);
+  };
+  action.addEventListener("click", trigger);
+  action.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") trigger(event);
+  });
+  row.appendChild(action);
+  return row;
+}
+
+function placeCheckouts(svg: SVGSVGElement): void {
+  const rows = svg.querySelectorAll(".commit-row");
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows.item(index);
+    if (!(row instanceof SVGGElement)) continue;
+    const entry = row.parentElement?.parentElement?.parentElement;
+    if (entry instanceof SVGGElement && !entry.classList.contains("commit-entry")) {
+      entry.classList.add("commit-entry");
+    }
+    const subject = row.querySelector(".commit-subject");
+    const action = row.querySelector(".commit-checkout");
+    const hit = row.querySelector(".commit-hit");
+    const caption = action?.querySelector("text");
+    const button = action?.querySelector("rect");
+    if (!(subject instanceof SVGTextElement) || !(action instanceof SVGGElement) || !(hit instanceof SVGRectElement) || !(caption instanceof SVGTextElement) || !(button instanceof SVGRectElement)) continue;
+    const labelWidth = caption.getComputedTextLength();
+    if (labelWidth <= 0) continue;
+    const buttonWidth = Math.ceil(labelWidth) + 16;
+    const x = Math.ceil(subject.getComputedTextLength()) + 10;
+    const msgOffset = Math.max(0, Math.ceil(translateX(row.parentElement)));
+    setAttr(action, "transform", `translate(${x}, 0)`);
+    setAttr(button, "width", String(buttonWidth));
+    setAttr(caption, "x", String(buttonWidth / 2));
+    setAttr(hit, "x", String(-msgOffset));
+    setAttr(hit, "y", "-12");
+    setAttr(hit, "width", String(msgOffset + x + buttonWidth + 8));
+    setAttr(hit, "height", "24");
+    if (!row.classList.contains("is-placed")) row.classList.add("is-placed");
+  }
+}
+
+function translateX(node: Element | null): number {
+  const match = node?.getAttribute("transform")?.match(/translate\(([-\d.]+)/);
+  return match?.[1] ? Number(match[1]) || 0 : 0;
+}
+
+function setAttr(node: Element, name: string, value: string): void {
+  if (node.getAttribute(name) !== value) node.setAttribute(name, value);
 }
 
 function growSvg(svg: SVGSVGElement): void {

@@ -4,7 +4,7 @@ A dockable Rhino panel with two tabs. **Repository** (first) is git-style versio
 
 ## Repository tab
 
-Enter a server, repository, and branch, then pull or push. Pull checks the branch out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. The result of a pull or push is written to Rhino's command history and shown under the buttons.
+Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
 
 ## Agents tab
 
@@ -50,7 +50,7 @@ Once Rhino opens, run `RhinoClient`. The panel uses Rhino's standard docking sys
 
 A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for `git_engine` next to itself and runs it with `dotnet`. Set `RHINOTRUNK_SERVER_PROJECT` to the server `.csproj` if that project lives somewhere else.
 
-`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. `Commit` on pull lists recent commit messages; click one, or type a message or a commit id. Leave it empty to pull the branch tip. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
+`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
 
 `npm start` launches Rhino 8 with `RHINO_PACKAGE_DIRS` pointing to the build output. It does not use an already running Rhino instance. Restart this development instance after changing C# or rebuilding the embedded UI.
 
@@ -82,7 +82,7 @@ Production uses a separate `panel.host.html`, embedded in the plugin. It never s
 
 ## Debug in VS Code
 
-Open this folder, install the recommended extension, select **RhinoClient — Rhino 8**, and press F5. The launch task builds the plugin and starts Rhino with the plugin folder registered for that process. Run `RhinoClient` in Rhino. **Attach to Rhino** is also available for a development instance launched with `npm start`.
+Open this folder, install the recommended extension, select **RhinoClient — Rhino 8**, and press F5. On Windows the launch task builds the plugin and starts Rhino with the plugin folder registered for that process. On Mac the same configuration builds, starts `/Applications/Rhino 8.app`, and attaches, because the debugger cannot launch that app through `dotnet`. That path uses the `rhinoClient.launch` command from `.vscode/rhino-debug`. Run `RhinoClient` in Rhino. **Attach to Rhino** is also available for a development instance launched with `npm start`.
 
 ## Structure
 
@@ -112,7 +112,7 @@ scripts/                             build and development launch helpers
 .vscode/                             build task and debugger configuration
 ```
 
-Git sync: TypeScript sends `ready`, `commits`, `pull`, `push`, and `graph`. C# replies with `session`, `commits`, `status`, `graph`, and `theme`. Agents: TypeScript sends session, task, settings and scope commands. C# replies with `control.state`, `control.error` and selection results. All replies use `window.rhinoClient.receive(...)`. `ClientPanel` routes each message by type and answers `ready` for both tabs. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
+Git sync: TypeScript sends `ready`, `repos`, `branches`, `pull`, `checkout`, `push`, and `graph`. C# replies with `session`, `repos`, `branches`, `status`, `graph`, and `theme`. Agents: TypeScript sends session, task, settings, scope and `task.merge` commands. C# replies with `control.state`, `control.error` and selection results. All replies use `window.rhinoClient.receive(...)`. `ClientPanel` routes each message by type and answers `ready` for both tabs. The native transport uses Eto's `window.eto.postMessage` on macOS and Eto's WebView2 message channel on Windows. Extend these messages to build the UI while keeping Rhino operations in C#.
 
 All newly AI-authored C# files use `.ai.cs`, as described in `AGENTS.md`.
 

@@ -20,6 +20,8 @@ public sealed class ClientPanel : Panel
     private readonly GeometrySync _sync;
     private CancellationTokenSource _unload = new();
     private int _graphGeneration;
+    private int _reposGeneration;
+    private int _branchesGeneration;
     private bool _busy;
     private bool _closed;
     private bool _disposed;
@@ -70,15 +72,22 @@ public sealed class ClientPanel : Panel
                     SendStatus(_busy ? _busyMessage : "Connected to Rhino", false, _busy);
                     await _control.Command(command);
                     break;
-                case "commits":
-                    _ = SendCommits(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                case "repos":
+                    _ = SendRepos(Text(command, "server"));
+                    break;
+                case "branches":
+                    _ = SendBranches(Text(command, "server"), Text(command, "repo"));
                     break;
                 case "graph":
                     _ = SendGraph(Text(command, "server"), Text(command, "repo"));
                     break;
                 case "pull":
-                    _ = Pull(new SyncTarget(
-                        Text(command, "server"), Text(command, "repo"), Text(command, "branch"), NullIfEmpty(Text(command, "commit"))));
+                    _ = Pull(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")));
+                    break;
+                case "checkout":
+                    _ = Checkout(
+                        new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
+                        Text(command, "commit"));
                     break;
                 case "push":
                     _ = Push(
@@ -104,12 +113,14 @@ public sealed class ClientPanel : Panel
 
     internal SyncTarget ReadTarget() => _sync.ReadTarget();
 
-    internal Task<IReadOnlyList<CommitChoice>> ListCommits(SyncTarget target) =>
-        _sync.ListCommitsAsync(target, _unload.Token);
+    internal Task<SyncResult> Pull(SyncTarget target, bool interactive = true) =>
+        RunAsync("Pulling…", token => _sync.PullAsync(target, interactive, token));
 
-    internal Task<SyncResult> Pull(SyncTarget target) => RunAsync("Pulling…", () => _sync.PullAsync(target, _unload.Token));
+    internal Task<SyncResult> Checkout(SyncTarget target, string commit, bool interactive = true) =>
+        RunAsync("Checking out…", token => _sync.CheckoutAsync(target, commit, interactive, token));
 
-    internal Task<SyncResult> Push(SyncTarget target, string message) => RunAsync("Pushing…", () => _sync.PushAsync(target, message, _unload.Token));
+    internal Task<SyncResult> Push(SyncTarget target, string message) =>
+        RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
 
     // One-click merge of a finished agent task: same sync pipeline as Push and Pull, so it shares their busy state.
     private async void MergeTask(string id)
@@ -125,7 +136,7 @@ public sealed class ClientPanel : Panel
         try
         {
             var target = _sync.ReadTarget();
-            result = await RunAsync($"Merging {request.Title}…", () => _sync.MergeTaskAsync(target, request, _unload.Token));
+            result = await RunAsync($"Merging {request.Title}…", token => _sync.MergeTaskAsync(target, request, token));
         }
         catch (Exception ex)
         {
@@ -147,7 +158,7 @@ public sealed class ClientPanel : Panel
         });
     }
 
-    private async Task<SyncResult> RunAsync(string busyMessage, Func<Task<SyncResult>> work)
+    private async Task<SyncResult> RunAsync(string busyMessage, Func<CancellationToken, Task<SyncResult>> action)
     {
         if (_closed) return SyncResult.Fail("The panel has closed.");
         if (_busy)
@@ -162,7 +173,7 @@ public sealed class ClientPanel : Panel
         SendStatus(_busyMessage, false, true);
         try
         {
-            var result = await work();
+            var result = await action(_unload.Token);
             _busy = false;
             SendStatus(result.Message, !result.Ok, false);
             return result;
@@ -181,28 +192,54 @@ public sealed class ClientPanel : Panel
         }
     }
 
-    private async Task SendCommits(SyncTarget target)
+    private async Task SendRepos(string server)
     {
-        if (_closed || _busy) return;
+        if (_closed) return;
+        var requested = server.Trim();
+        var generation = ++_reposGeneration;
         try
         {
-            var commits = await _sync.ListCommitsAsync(target, _unload.Token);
-            if (_closed) return;
-            Post(new
-            {
-                type = "commits",
-                commits = commits.Select(commit => new { id = commit.Id, message = commit.Message }),
-                error = false,
-                message = "",
-            });
+            var repos = await _sync.ListReposAsync(requested, _unload.Token);
+            if (_closed || generation != _reposGeneration) return;
+            Post(new { type = "repos", server = requested, repos, error = false, message = "" });
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
         {
-            if (_closed) return;
-            Post(new { type = "commits", commits = Array.Empty<CommitChoice>(), error = true, message = ex.Message });
+            if (_closed || generation != _reposGeneration) return;
+            Post(new { type = "repos", server = requested, repos = Array.Empty<string>(), error = true, message = ex.Message });
+        }
+    }
+
+    private async Task SendBranches(string server, string repo)
+    {
+        if (_closed) return;
+        var requestedServer = server.Trim();
+        var requestedRepo = repo.Trim();
+        var generation = ++_branchesGeneration;
+        try
+        {
+            var branches = await _sync.ListBranchesAsync(requestedServer, requestedRepo, _unload.Token);
+            if (_closed || generation != _branchesGeneration) return;
+            Post(new { type = "branches", server = requestedServer, repo = requestedRepo, branches, error = false, message = "" });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is SyncException or RhinoTrunk.Client.RhinoTrunkApiException or HttpRequestException)
+        {
+            if (_closed || generation != _branchesGeneration) return;
+            Post(new
+            {
+                type = "branches",
+                server = requestedServer,
+                repo = requestedRepo,
+                branches = Array.Empty<string>(),
+                error = true,
+                message = ex.Message,
+            });
         }
     }
 
@@ -261,8 +298,6 @@ public sealed class ClientPanel : Panel
             _bridge.Post(message);
         });
     }
-
-    private static string? NullIfEmpty(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private void SendSession()
     {
