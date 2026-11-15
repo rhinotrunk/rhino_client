@@ -47,7 +47,10 @@ export type PanelCommand =
   | { type: 'pull'; server: string; repo: string; branch: string }
   | { type: 'checkout'; server: string; repo: string; branch: string; commit: string; message: string; unpushed: UnpushedChoice }
   | { type: 'push'; server: string; repo: string; branch: string; message: string }
-  | { type: 'graph'; server: string; repo: string };
+  | { type: 'graph'; server: string; repo: string }
+  | { type: 'commit.preview' | 'commit.prefetch'; server: string; repo: string; commit: string }
+  | { type: 'commit.preview.clear' }
+  | { type: 'merge.pick'; server: string; repo: string; branch: string; commits: string[] };
 export type HostEvent =
   | { type: 'control.state' } & ControlState
   | { type: 'control.error'; message: string }
@@ -63,7 +66,9 @@ export type HostEvent =
   | { type: 'push.detached'; commit: string }
   // The commit the model is based on, or null before its first pull or push.
   | { type: 'head'; repo: string; branch: string; commit: string | null }
-  | { type: 'theme'; scheme: 'light' | 'dark' };
+  | { type: 'theme'; scheme: 'light' | 'dark' }
+  // The viewport preview was discarded (a pull, push, checkout or merge started), so the graph selection goes too.
+  | { type: 'selection.clear' };
 
 export function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;

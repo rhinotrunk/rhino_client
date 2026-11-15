@@ -489,3 +489,9 @@ input.task-search { margin: 2px 10px 10px; width: calc(100% - 20px); height: 28p
 .target-picker { width: auto; height: 22px; max-width: 14ch; line-height: 22px; border: 0; border-radius: 5px; background-color: color-mix(in srgb, currentColor 14%, transparent); color: inherit; padding: 0 20px 0 6px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .target-picker:focus-visible { outline: 2px solid var(--ring); }
 .target-picker option { color: var(--foreground); background: var(--card); }
+
+/* Commits picked in the graph: a ring on the dot and an emphasised subject. Shift-click adds to the pick;
+   with two or more the pick order is shown, since it is the merge order. */
+[data-commit-row] { cursor: pointer; }
+.commit-picked { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.commit-pick-order { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1; color: var(--primary-foreground); background: var(--primary); }

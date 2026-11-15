@@ -38,6 +38,8 @@ export function useRepo(bridge: Bridge) {
   const [detached, setDetached] = useState<{ commit: string } | null>(null);
   const [newBranch, setNewBranch] = useState("");
   const [conflict, setConflict] = useState<{ id: string; title: string; branch: string; into: string; conflicts: number } | null>(null);
+  // Commits picked in the graph, in click order: one previews it in the viewport, two or more pick a merge in Rhino.
+  const [picked, setPicked] = useState<string[]>([]);
   const branchRef = useRef("main");
   const checkoutTarget = useRef<string | undefined>(undefined);
   const [repos, setRepos] = useState<Options>({ loading: false, options: [], note: "", server: "", repo: "" });
@@ -86,6 +88,8 @@ export function useRepo(bridge: Bridge) {
       } else if (event.type === "push.detached") {
         setDetached({ commit: event.commit });
         setNewBranch(`${branchRef.current.trim() || "branch"}-${event.commit.replace(/^sha256:/, "").slice(0, 7)}`);
+      } else if (event.type === "selection.clear") {
+        setPicked([]);
       } else if (event.type === "head") {
         setHistory((existing) => (existing.repo === event.repo ? { ...existing, head: event.commit ?? "" } : existing));
       } else if (event.type === "status") {
@@ -185,7 +189,32 @@ export function useRepo(bridge: Bridge) {
   };
   return {
     bridge, server, repo, branch, message, unpushed, detached, conflict, newBranch, setNewBranch, fresh, status, error, busy, ready, scheme, history, requestedRepo, control, repos, branches,
-    idle,
+    idle, picked,
+    // A plain click previews one commit (clicking it again clears); shift-click adds or removes a commit, and two
+    // or more start merge picking in Rhino.
+    pickCommit(id: string, extend: boolean) {
+      if (!ready) return;
+      const next = extend
+        ? picked.includes(id) ? picked.filter((other) => other !== id) : [...picked, id]
+        : picked.length === 1 && picked[0] === id ? [] : [id];
+      setPicked(next);
+      const spec = snapshot();
+      if (next.length === 0) bridge.send({ type: "commit.preview.clear" });
+      else if (next.length === 1) bridge.send({ type: "commit.preview", ...spec, commit: next[0]! });
+      else bridge.send({ type: "merge.pick", ...spec, branch: branch.trim(), commits: next });
+    },
+    // A click away from the graph ends a single-commit preview. Merge picking is changed by clicking its commits.
+    clearPreview() {
+      if (picked.length !== 1) return;
+      setPicked([]);
+      bridge.send({ type: "commit.preview.clear" });
+    },
+    // The pointer is on a commit: a good moment to load its preview so the click is immediate.
+    prefetch(id: string) {
+      if (!idle) return;
+      const spec = snapshot();
+      bridge.send({ type: "commit.prefetch", ...spec, commit: id });
+    },
     setServer, setRepo, setBranch, setMessage, remember, requestRepos, requestBranches, chooseRepo,
     pull() {
       const spec = snapshot();

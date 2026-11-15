@@ -67,6 +67,18 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
     listRef.current?.querySelector("[data-pr]")?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [focus]);
 
+  // A click anywhere outside the commit rows ends a single-commit preview: the viewport goes back to the model.
+  const clearPreview = useRef(repo.clearPreview);
+  clearPreview.current = repo.clearPreview;
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-commit-row]")) return;
+      clearPreview.current();
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
+
   const note = historyNote(repo, requestedRepo, ready);
   const headBranch = repo.branch.trim();
 
@@ -94,7 +106,13 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
                 head={head}
                 busy={!idle}
                 selected={selected === row.commit.id}
-                onSelect={() => setSelected(row.commit.id)}
+                pick={repo.picked.indexOf(row.commit.id)}
+                picking={repo.picked.length > 1}
+                onSelect={(extend) => {
+                  setSelected(row.commit.id);
+                  repo.pickCommit(row.commit.id, extend);
+                }}
+                onHover={() => repo.prefetch(row.commit.id)}
                 onCheckout={() => repo.checkout(row.commit.id, row.commit.refs.find((ref) => pickable(ref)))}
                 onPickBranch={(name) => repo.setBranch(name)}
                 current={branchName}
@@ -148,10 +166,12 @@ function Gutter({ gutter, children }: { gutter: number; children: React.ReactNod
 }
 
 function Row({
-  row, gutter, pills, pr, head, busy, selected, onSelect, onCheckout, onPickBranch, current, onMerge, onClose, targets, onRetarget, onMergeBranch,
+  row, gutter, pills, pr, head, busy, selected, pick, picking, onSelect, onHover, onCheckout, onPickBranch, current, onMerge, onClose, targets, onRetarget, onMergeBranch,
 }: {
   row: LaneRow; gutter: number; pills: Pill[]; pr: AgentTask | undefined; head: boolean; busy: boolean; selected: boolean;
-  onSelect: () => void; onCheckout: () => void; onPickBranch: (name: string) => void; current?: string; onMerge: () => void; onClose: () => void; targets: string[]; onRetarget: (name: string) => void; onMergeBranch: (source: string, into: string) => void;
+  /** Position in the graph's commit selection, or -1. */
+  pick: number; picking: boolean;
+  onSelect: (extend: boolean) => void; onHover: () => void; onCheckout: () => void; onPickBranch: (name: string) => void; current?: string; onMerge: () => void; onClose: () => void; targets: string[]; onRetarget: (name: string) => void; onMergeBranch: (source: string, into: string) => void;
 }) {
   const { commit, lane } = row;
   const agent = commit.author?.kind === "agent";
@@ -167,11 +187,13 @@ function Row({
       aria-selected={selected}
       tabIndex={0}
       data-pr={pr ? "" : undefined}
-      onClick={onSelect}
+      data-commit-row=""
+      onClick={(event) => onSelect(event.shiftKey)}
+      onPointerEnter={onHover}
       onDoubleClick={onCheckout}
       onKeyDown={(event) => {
         if (event.key === "Enter") onCheckout();
-        else if (event.key === " ") { event.preventDefault(); onSelect(); }
+        else if (event.key === " ") { event.preventDefault(); onSelect(event.shiftKey); }
       }}
       className={cn(
         "group flex items-center pr-3 text-[12px] outline-none",
@@ -188,6 +210,7 @@ function Row({
           <path key={`b${index}`} d={curve(edge, mid, ROW)} stroke={palette[edge.color % palette.length]} strokeWidth={2} fill="none" />
         ))}
         {head ? <circle cx={nodeX} cy={mid} r={8} fill="none" stroke={color} strokeOpacity={0.45} strokeWidth={1.5} /> : null}
+        {pick >= 0 ? <circle className="commit-pick" cx={nodeX} cy={mid} r={7} fill="none" stroke="var(--primary)" strokeWidth={2.5} /> : null}
         {row.isMerge ? (
           <circle cx={nodeX} cy={mid} r={4} fill="var(--card)" stroke={color} strokeWidth={2} />
         ) : (
@@ -199,7 +222,10 @@ function Row({
           <RefPill key={pill.name} pill={pill} color={color} onPick={() => onPickBranch(pill.name)} />
         ))}
         {pr ? <PrBadge task={pr} onMerge={onMerge} onClose={onClose} targets={targets} onRetarget={onRetarget} /> : null}
-        <span className={cn("max-w-[34ch] truncate", head ? "font-medium" : "")} title={commit.message}>{first}</span>
+        {picking && pick >= 0 ? (
+          <span className="commit-pick-order" title="Merge pick order">{pick + 1}</span>
+        ) : null}
+        <span className={cn("max-w-[34ch] truncate", head ? "font-medium" : "", pick >= 0 && "commit-picked")} title={commit.message}>{first}</span>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2 pl-4 text-[11px] text-muted-foreground">
         {mergeable ? (

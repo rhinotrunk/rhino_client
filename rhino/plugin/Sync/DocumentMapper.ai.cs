@@ -17,27 +17,44 @@ namespace RhinoClient.Sync;
 /// <summary>
 /// Maps a Rhino document to settings, layers, and model-space objects. Other tables and block instances are skipped.
 /// </summary>
-internal static class DocumentMapper
+internal static partial class DocumentMapper
 {
     internal const string AttributesComponent = "attributes";
     internal const string GeometryComponent = "geometry";
 
-    internal static bool IsSupported(EntityVersion entity)
+    internal static bool IsSupported(EntityVersion entity) => IsSupported(entity.Kind, entity.Manifest?.Subtype);
+
+    /// <summary>
+    /// Kinds this client reads into and writes from a Rhino document. Everything else in a commit (notes,
+    /// materials and other tables written by other clients, block instances) is left untouched on the server:
+    /// a pull skips it and a push never deletes it.
+    /// </summary>
+    internal static bool IsSupported(string kind, string? subtype)
     {
-        if (entity.Kind is EntityKinds.Settings or EntityKinds.Layer) return true;
-        if (entity.Kind != EntityKinds.Object) return false;
-        return entity.Manifest?.Subtype is not "InstanceReferenceGeometry";
+        if (kind is EntityKinds.Settings or EntityKinds.Layer) return true;
+        if (IsTableKind(kind)) return true;
+        if (kind != EntityKinds.Object) return false;
+        return subtype is not "InstanceReferenceGeometry";
     }
 
     internal static int ModelObjectCount(RhinoDoc doc) =>
         doc.Objects.GetObjectList(ModelSettings()).Count(obj => obj.Attributes.Space == ActiveSpace.ModelSpace);
 
-    internal static CapturedPush Capture(RhinoDoc doc, WorkingCopy copy)
+    /// <summary>
+    /// Compares the document with the working copy's base. <paramref name="baseGeometry"/> holds decoded base
+    /// geometry for objects whose serialized bytes differ from the base: Rhino's geometry JSON is not stable across
+    /// a decode/encode or a file save, so an object whose geometry is equal to its base keeps the base hash instead
+    /// of becoming a phantom change. Objects that still need that check are listed in
+    /// <see cref="CapturedPush.GeometryCandidates"/>.
+    /// </summary>
+    internal static CapturedPush Capture(RhinoDoc doc, WorkingCopy copy, IReadOnlyDictionary<string, GeometryBase>? baseGeometry = null)
     {
         var captured = new CapturedPush();
         var settings = SettingsAttributes(doc);
         Consider(captured, copy, EntityKinds.Settings, Names.SettingsId, null, null, null,
             HashAttributes(settings), settings, new List<EntityRef>());
+
+        CaptureTables(doc, copy, captured);
 
         var layers = LiveLayers(doc);
         if (layers.Count == 0) throw new SyncException("The document has no layers to push.");
@@ -53,8 +70,11 @@ internal static class DocumentMapper
         foreach (var layer in ParentsFirst(layers.Values))
         {
             var attributes = LayerAttributes(layer);
+            var layerRefs = LayerRefs(layer);
+            AddLayerTableRefs(doc, layer, layerRefs);
+            AddLayerExtras(layer, attributes);
             Consider(captured, copy, EntityKinds.Layer, layer.Id.ToString("D"), null, null, null,
-                HashAttributes(attributes), attributes, LayerRefs(layer));
+                HashAttributes(attributes), attributes, layerRefs);
         }
 
         foreach (var obj in doc.Objects.GetObjectList(ModelSettings()))
@@ -83,10 +103,24 @@ internal static class DocumentMapper
                 var serialized = SerializeGeometry(geometry);
                 geometryHash = serialized.Hash;
                 geometryBytes = serialized.Bytes;
+                if (existing?.Geometry is { } baseHash && baseHash != geometryHash)
+                {
+                    if (baseGeometry is not null && baseGeometry.TryGetValue(id, out var before) && SameGeometry(geometry, before))
+                    {
+                        geometryHash = baseHash;
+                        geometryBytes = null;
+                    }
+                    else if (baseGeometry is null)
+                    {
+                        captured.GeometryCandidates[id] = baseHash;
+                    }
+                }
             }
 
             var attributes = ObjectAttributesJson(obj);
             var refs = new List<EntityRef> { Changes.Ref(EntityKinds.Layer, layer.Id.ToString("D"), RefRoles.Layer) };
+            AddObjectTableRefs(doc, obj.Attributes, refs);
+            AddObjectExtras(obj.Attributes, attributes);
             captured.Serials[id] = obj.RuntimeSerialNumber;
             Consider(captured, copy, EntityKinds.Object, id, geometry.GetType().Name, geometryHash, geometryBytes,
                 HashAttributes(attributes), attributes, refs);
@@ -94,17 +128,74 @@ internal static class DocumentMapper
 
         foreach (var entry in copy.Entries)
         {
-            if (entry.Kind is not (EntityKinds.Layer or EntityKinds.Object)) continue;
-            if (!captured.Entries.ContainsKey(WorkingCopy.Key(entry.Kind, entry.Id)))
-                captured.Changes.Add(Changes.Delete(entry.Kind, entry.Id));
+            if (entry.Kind is not (EntityKinds.Layer or EntityKinds.Object) && !IsTableKind(entry.Kind)) continue;
+            var key = WorkingCopy.Key(entry.Kind, entry.Id);
+            if (captured.Entries.ContainsKey(key)) continue;
+            if (!IsSupported(entry.Kind, entry.Subtype))
+            {
+                // Never pulled into the document, so its absence is not a delete.
+                captured.Entries[key] = entry.Copy();
+                continue;
+            }
+
+            captured.Changes.Add(Changes.Delete(entry.Kind, entry.Id));
         }
 
         return captured;
     }
 
-    internal static void RejectUnsupported(IReadOnlyList<EntityVersion> entities)
+    /// <summary>
+    /// Geometry equality for change detection. Annotations are compared without their dimension style id: style
+    /// tables are not synced, so Rhino rebinds an annotation to the receiving document's style when it is added.
+    /// </summary>
+    internal static bool SameGeometry(GeometryBase current, GeometryBase before)
+    {
+        if (GeometryBase.GeometryEquals(current, before)) return true;
+        if (current is not AnnotationBase annotation || before is not AnnotationBase previous) return false;
+        using var copy = (AnnotationBase)annotation.Duplicate();
+        copy.DimensionStyleId = previous.DimensionStyleId;
+        return GeometryBase.GeometryEquals(copy, previous);
+    }
+
+    /// <summary>Keys (kind + id) of the entities a capture changes relative to its base.</summary>
+    internal static HashSet<string> ChangedKeys(CapturedPush captured) =>
+        captured.Changes.Select(change => WorkingCopy.Key(change.Kind, change.Id)).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>True when the captured local state of <paramref name="key"/> equals <paramref name="incoming"/> (null = absent).</summary>
+    internal static bool LocalEquals(CapturedPush captured, string key, BaseEntry? incoming)
+    {
+        captured.Entries.TryGetValue(key, out var local);
+        if (local is null || incoming is null) return local is null && incoming is null;
+        return Matches(local, incoming.Subtype, incoming.Geometry, incoming.Attributes ?? "", incoming.Refs);
+    }
+
+    /// <summary>Decodes base geometry blobs for <see cref="CapturedPush.GeometryCandidates"/>; unreadable blobs are left out.</summary>
+    internal static Dictionary<string, GeometryBase> DecodeBaseGeometry(IReadOnlyDictionary<string, string> candidates, IReadOnlyDictionary<string, byte[]> blobs)
+    {
+        var decoded = new Dictionary<string, GeometryBase>(StringComparer.Ordinal);
+        foreach (var (id, hash) in candidates)
+        {
+            if (!blobs.TryGetValue(hash, out var bytes)) continue;
+            try
+            {
+                if (CommonObject.FromJSON(Encoding.UTF8.GetString(bytes)) is GeometryBase geometry) decoded[id] = geometry;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        return decoded;
+    }
+
+    /// <summary>
+    /// The entities this client applies, after checking them. Entities it does not handle (notes, other tables,
+    /// block instances) are counted in <paramref name="skipped"/> and stay untouched on the server.
+    /// </summary>
+    internal static List<EntityVersion> Supported(IReadOnlyList<EntityVersion> entities, bool complete, out string? skipped)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var supported = new List<EntityVersion>();
         var settings = 0;
         var layers = 0;
         foreach (var entity in entities)
@@ -124,13 +215,13 @@ internal static class DocumentMapper
             if (entity.Kind == EntityKinds.Layer) layers++;
             if (entity.Kind == EntityKinds.Object && !entity.Manifest.Components.ContainsKey(GeometryComponent))
                 throw new SyncException($"Object {entity.Id} has no geometry.");
+            supported.Add(entity);
         }
 
-        if (counts.Count > 0)
-            throw new SyncException("This commit has entities this client cannot apply yet: " +
-                string.Join(", ", counts.Select(pair => pair.Value + " " + pair.Key)) + ".");
-        if (settings != 1) throw new SyncException("The commit must contain exactly one settings entity.");
-        if (layers < 1) throw new SyncException("The commit has no layers.");
+        skipped = counts.Count == 0 ? null : string.Join(", ", counts.Select(pair => pair.Value + " " + pair.Key));
+        if (complete && settings != 1) throw new SyncException("The commit must contain exactly one settings entity.");
+        if (complete && layers < 1) throw new SyncException("The commit has no layers.");
+        return supported;
     }
 
     internal static List<DecodedObject> DecodeObjects(IReadOnlyList<EntityVersion> entities, IReadOnlyDictionary<string, byte[]> blobs)
@@ -157,63 +248,61 @@ internal static class DocumentMapper
         }
     }
 
-    /// <param name="replace">
-    /// Make the model match the commit: overwrite objects that differ without a review and delete model
-    /// objects the commit does not list. Objects this client does not sync, such as block instances, are kept.
-    /// Unpushed edits are lost, so only pass it once they have been pushed or the user chose to discard them.
-    /// </param>
-    internal static Dictionary<string, uint> Apply(
-        RhinoDoc doc,
-        IReadOnlyList<EntityVersion> entities,
-        IReadOnlyDictionary<string, byte[]> blobs,
-        IReadOnlyList<DecodedObject> objects,
-        IReadOnlyDictionary<string, ConflictChoice> resolutions,
-        bool replace = false)
-    {
-        var settings = entities.Single(entity => entity.Kind == EntityKinds.Settings);
-        var layers = ParentsFirst(entities.Where(entity => entity.Kind == EntityKinds.Layer).ToList());
-        var settingsAttributes = RequireAttributes(settings, blobs);
-        var layerAttributes = layers.ToDictionary(layer => layer.Id, layer => RequireAttributes(layer, blobs), StringComparer.Ordinal);
-        return ApplyPrepared(doc, settingsAttributes, layers, layerAttributes, objects, resolutions, replace);
-    }
-
-    private static Dictionary<string, uint> ApplyPrepared(
-        RhinoDoc doc,
-        JsonObject settingsAttributes,
-        IReadOnlyList<EntityVersion> layers,
-        Dictionary<string, JsonObject> layerAttributes,
-        IReadOnlyList<DecodedObject> objects,
-        IReadOnlyDictionary<string, ConflictChoice> resolutions,
-        bool replace)
+    /// <summary>
+    /// Applies the result of a three-way pull: only the entities the merge decided to change are touched, as one
+    /// undo step. Order: settings, layers (parents first), object deletes, object puts, then emptied layers
+    /// (children first). A layer the commit deletes but that still holds local objects is kept and reported.
+    /// </summary>
+    internal static ApplyOutcome ApplyChanges(RhinoDoc doc, IncomingChanges changes)
     {
         var redraw = doc.Views.RedrawEnabled;
         doc.Views.RedrawEnabled = false;
-        var undo = doc.BeginUndoRecord(replace ? "RhinoTrunk checkout" : "RhinoTrunk pull");
+        var undo = doc.BeginUndoRecord("RhinoTrunk pull");
+        var outcome = new ApplyOutcome();
         try
         {
-            ApplySettings(doc, settingsAttributes);
-            var keep = new HashSet<Guid>();
-            foreach (var layer in layers)
+            if (changes.Settings is not null) ApplySettings(doc, changes.Settings);
+            foreach (var kind in TableKinds)
+                foreach (var put in changes.TablePuts.Where(put => put.Entity.Kind == kind))
+                    UpsertTable(doc, put.Entity, put.Attributes);
+
+            var puts = changes.LayerPuts.ToDictionary(put => put.Layer.Id, StringComparer.Ordinal);
+            var orderedPuts = ParentsFirst(changes.LayerPuts, put => put.Layer.Id, put =>
             {
-                var id = ParseGuid(layer.Id, "layer");
-                keep.Add(id);
-                UpsertLayer(doc, id, ParentGuid(layer), layerAttributes[layer.Id]);
+                var parent = put.Layer.Manifest?.Refs.FirstOrDefault(reference =>
+                    reference.Role == RefRoles.Parent && reference.Kind == EntityKinds.Layer);
+                return parent is not null && puts.TryGetValue(parent.Id, out var parentPut) ? parentPut : null;
+            });
+            foreach (var put in orderedPuts)
+                UpsertLayer(doc, ParseGuid(put.Layer.Id, "layer"), ParentGuid(put.Layer), put.Attributes, put.Layer.Manifest?.Refs ?? new List<EntityRef>());
+
+            foreach (var id in changes.ObjectDeletes)
+            {
+                var obj = doc.Objects.FindId(ParseObjectId(id));
+                if (obj is not null && !obj.IsDeleted && !doc.Objects.Delete(obj, true))
+                    throw new SyncException($"Could not delete object {id}.");
             }
 
-            if (replace) DeleteUnlistedObjects(doc, objects);
             var deleted = DeletedModelObjects(doc);
-            var serials = new Dictionary<string, uint>(StringComparer.Ordinal);
-            foreach (var item in objects)
+            foreach (var (item, choice) in changes.ObjectPuts)
             {
-                ConflictChoice? choice = resolutions.TryGetValue(item.Entity.Id, out var selected) ? selected : null;
-                PlaceObject(doc, item, choice, replace, deleted, serials);
+                if (choice == ConflictChoice.KeepExisting) continue;
+                PlaceObject(doc, item, choice, deleted, outcome.Serials);
             }
 
-            // Rhino will not delete a layer that still holds objects, so this runs after objects move to the commit's layers.
-            EnsureCurrent(doc, keep);
-            DeleteExtraLayers(doc, keep);
+            var layerDeletes = changes.LayerDeletes.Select(id => ParseGuid(id, "layer")).ToHashSet();
+            if (changes.RemoveEmptyLocalLayers)
+            {
+                foreach (var layer in LiveLayers(doc).Values)
+                    if (!changes.TargetLayers.Contains(layer.Id)) layerDeletes.Add(layer.Id);
+            }
+
+            var live = LiveLayers(doc).Keys.Where(id => !layerDeletes.Contains(id)).ToHashSet();
+            EnsureCurrent(doc, live);
+            DeleteLayersIfEmpty(doc, layerDeletes, changes.LayerDeletes.ToHashSet(StringComparer.Ordinal), outcome.KeptLayers);
+            foreach (var (kind, id) in changes.TableDeletes) DeleteTable(doc, kind, id);
             if (undo != 0) doc.EndUndoRecord(undo);
-            return serials;
+            return outcome;
         }
         catch (Exception failure)
         {
@@ -238,6 +327,39 @@ internal static class DocumentMapper
             doc.Views.Redraw();
         }
     }
+
+    /// <summary>Deletes layers children first. A layer that still holds objects or a kept child stays.</summary>
+    private static void DeleteLayersIfEmpty(RhinoDoc doc, HashSet<Guid> pending, HashSet<string> reportable, List<string> kept)
+    {
+        var remaining = new HashSet<Guid>(pending);
+        var progress = true;
+        while (remaining.Count > 0 && progress)
+        {
+            progress = false;
+            foreach (var id in remaining.ToList())
+            {
+                var index = doc.Layers.Find(id, true, RhinoMath.UnsetIntIndex);
+                if (index == RhinoMath.UnsetIntIndex) { remaining.Remove(id); progress = true; continue; }
+                var layer = doc.Layers[index];
+                if (doc.Layers.Any(other => !other.IsDeleted && other.ParentLayerId == id && LiveLayer(doc, other.Id))) continue;
+                remaining.Remove(id);
+                progress = true;
+                if (doc.Objects.FindByLayer(layer) is { Length: > 0 })
+                {
+                    if (reportable.Contains(id.ToString("D"))) kept.Add(layer.FullPath);
+                    continue;
+                }
+
+                if (!doc.Layers.Delete(index, true))
+                    throw new SyncException($"Could not delete layer '{layer.FullPath}'.");
+            }
+        }
+
+        foreach (var id in remaining)
+            if (reportable.Contains(id.ToString("D")) && doc.Layers.FindId(id) is { } layer) kept.Add(layer.FullPath);
+    }
+
+    private static bool LiveLayer(RhinoDoc doc, Guid id) => doc.Layers.FindId(id) is { IsDeleted: false };
 
     private static void Consider(
         CapturedPush captured,
@@ -359,7 +481,7 @@ internal static class DocumentMapper
         ApplyDocumentUserText(doc, ReadObject(attributes, "userText"));
     }
 
-    private static void UpsertLayer(RhinoDoc doc, Guid id, Guid parentId, JsonObject attributes)
+    private static void UpsertLayer(RhinoDoc doc, Guid id, Guid parentId, JsonObject attributes, IReadOnlyList<EntityRef> refs)
     {
         var name = ReadString(attributes, "name");
         if (string.IsNullOrWhiteSpace(name) || name.Contains("::", StringComparison.Ordinal))
@@ -375,6 +497,7 @@ internal static class DocumentMapper
         layer.IsLocked = ReadBool(attributes, "locked", false);
         layer.ParentLayerId = parentId;
         WriteUserText((key, value) => layer.SetUserString(key, value), found ? layer.GetUserStrings() : null, ReadObject(attributes, "userText"));
+        ApplyLayerExtras(doc, layer, attributes, refs);
 
         if (!found)
         {
@@ -465,19 +588,6 @@ internal static class DocumentMapper
         return false;
     }
 
-    private static void DeleteUnlistedObjects(RhinoDoc doc, IReadOnlyList<DecodedObject> objects)
-    {
-        var listed = new HashSet<Guid>(objects.Select(item => ParseObjectId(item.Entity.Id)));
-        var extras = doc.Objects.GetObjectList(ModelSettings())
-            .Where(obj => obj.Attributes.Space == ActiveSpace.ModelSpace && !ShouldSkip(obj) && !listed.Contains(obj.Id))
-            .ToList();
-        foreach (var extra in extras)
-        {
-            if (!doc.Objects.Delete(extra, true, true))
-                throw new SyncException($"Could not delete object {extra.Id:D}, which is not in the commit.");
-        }
-    }
-
     internal static Guid ParseObjectId(string id) => ParseGuid(id, "object");
 
     internal static Dictionary<Guid, RhinoObject> DeletedModelObjects(RhinoDoc doc)
@@ -516,7 +626,6 @@ internal static class DocumentMapper
         RhinoDoc doc,
         DecodedObject item,
         ConflictChoice? choice,
-        bool replace,
         Dictionary<Guid, RhinoObject> deleted,
         Dictionary<string, uint> serials)
     {
@@ -529,8 +638,6 @@ internal static class DocumentMapper
         }
 
         var live = doc.Objects.FindId(id);
-        if (replace && choice is null && (live ?? deleted.GetValueOrDefault(id)) is { } existing && !ContentMatches(doc, existing, item))
-            choice = ConflictChoice.KeepIncoming;
         if (live is null && deleted.TryGetValue(id, out var dead))
         {
             var restore = choice == ConflictChoice.KeepIncoming || (choice is null && ContentMatches(doc, dead, item));
@@ -643,6 +750,7 @@ internal static class DocumentMapper
         };
         if (string.IsNullOrEmpty(attributes.Name)) attributes.Name = null;
         WriteUserText((key, value) => attributes.SetUserString(key, value), null, ReadObject(item.Attributes, "userText"));
+        ApplyObjectExtras(doc, attributes, item.Attributes, item.Entity.Manifest?.Refs ?? new List<EntityRef>());
         return attributes;
     }
 
@@ -692,7 +800,7 @@ internal static class DocumentMapper
 
     private static string HashAttributes(JsonObject attributes) => ContentHash.Compute(CanonicalJson.Serialize(attributes));
 
-    private static JsonObject RequireAttributes(EntityVersion entity, IReadOnlyDictionary<string, byte[]> blobs)
+    internal static JsonObject RequireAttributes(EntityVersion entity, IReadOnlyDictionary<string, byte[]> blobs)
     {
         var hash = RequireComponent(entity, AttributesComponent);
         var node = JsonNode.Parse(RequireBytes(blobs, hash, $"{entity.Kind} {entity.Id} attributes"));
@@ -1047,6 +1155,8 @@ internal static class DocumentMapper
 
 internal sealed class CapturedPush
 {
+    /// <summary>Object id to base geometry hash, for objects whose bytes differ from the base and still need an equality check.</summary>
+    internal Dictionary<string, string> GeometryCandidates { get; } = new(StringComparer.Ordinal);
     internal List<Change> Changes { get; } = new();
     internal Dictionary<string, byte[]> Blobs { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, BaseEntry> Entries { get; } = new(StringComparer.Ordinal);
@@ -1059,4 +1169,29 @@ internal sealed class DecodedObject(EntityVersion entity, JsonObject attributes,
     internal EntityVersion Entity { get; } = entity;
     internal JsonObject Attributes { get; } = attributes;
     internal GeometryBase Geometry { get; } = geometry;
+}
+
+/// <summary>What a pull applies to the document.</summary>
+internal sealed class IncomingChanges
+{
+    internal JsonObject? Settings { get; set; }
+    internal List<LayerPut> LayerPuts { get; } = new();
+    internal List<string> LayerDeletes { get; } = new();
+    internal List<(DecodedObject Item, ConflictChoice Choice)> ObjectPuts { get; } = new();
+    internal List<string> ObjectDeletes { get; } = new();
+    /// <summary>Materials, linetypes and groups to add or update, and to delete.</summary>
+    internal List<(EntityVersion Entity, JsonObject Attributes)> TablePuts { get; } = new();
+    internal List<(string Kind, string Id)> TableDeletes { get; } = new();
+    /// <summary>An unlinked document: delete local layers the commit does not have, when they are empty.</summary>
+    internal bool RemoveEmptyLocalLayers { get; set; }
+    internal HashSet<Guid> TargetLayers { get; } = new();
+    internal bool IsEmpty => Settings is null && TablePuts.Count == 0 && TableDeletes.Count == 0 && LayerPuts.Count == 0 && LayerDeletes.Count == 0 && ObjectPuts.Count == 0 && ObjectDeletes.Count == 0 && !RemoveEmptyLocalLayers;
+}
+
+internal sealed record LayerPut(EntityVersion Layer, JsonObject Attributes);
+
+internal sealed class ApplyOutcome
+{
+    internal Dictionary<string, uint> Serials { get; } = new(StringComparer.Ordinal);
+    internal List<string> KeptLayers { get; } = new();
 }

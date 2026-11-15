@@ -52,7 +52,7 @@ public sealed class SyncException : Exception
 /// Pulls and pushes settings, layers, and model geometry for one document.
 /// The returned tasks finish off the UI thread. Await them; do not block Rhino on the result.
 /// </summary>
-public sealed class GeometrySync : IDisposable
+public sealed partial class GeometrySync : IDisposable
 {
     private readonly WorkingCopy _copy;
     private readonly SemaphoreSlim _operation = new(1, 1);
@@ -80,7 +80,14 @@ public sealed class GeometrySync : IDisposable
     }
 
     public Task<SyncResult> PushAsync(SyncTarget target, string message, CancellationToken cancellationToken = default) =>
-        Run(() => PushCore(target, message, cancellationToken), cancellationToken);
+        PushAsync(target, message, interactive: true, cancellationToken);
+
+    /// <summary>
+    /// Commits the document's changes. When the branch has moved on, its changes are pulled in first (keeping the
+    /// document's own); objects changed on both sides are reviewed, or stop a scripted push.
+    /// </summary>
+    public Task<SyncResult> PushAsync(SyncTarget target, string message, bool interactive, CancellationToken cancellationToken = default) =>
+        Run(() => PushCore(target, message, interactive, cancellationToken), cancellationToken);
 
     public Task<SyncResult> PullAsync(SyncTarget target, CancellationToken cancellationToken = default) =>
         PullAsync(target, interactive: true, cancellationToken);
@@ -107,6 +114,10 @@ public sealed class GeometrySync : IDisposable
     /// <summary>Pulls the branch tip. An interactive pull reviews objects whose ids already differ. A scripted pull stops instead of prompting.</summary>
     public Task<SyncResult> PullAsync(SyncTarget target, bool interactive, CancellationToken cancellationToken = default) =>
         Run(() => PullCore(target, commit: null, interactive, cancellationToken), cancellationToken);
+
+    /// <summary>Pulls the branch tip. With <paramref name="discardLocal"/> the document is made to match it exactly.</summary>
+    public Task<SyncResult> PullAsync(SyncTarget target, bool interactive, bool discardLocal, CancellationToken cancellationToken = default) =>
+        Run(() => PullCore(target, commit: null, interactive, cancellationToken, discardLocal), cancellationToken);
 
     /// <summary>
     /// Replaces the model with a commit, so it never raises conflicts. Unpushed changes are handled as
@@ -139,7 +150,7 @@ public sealed class GeometrySync : IDisposable
         }
     }
 
-    private async Task<SyncResult> PushCore(SyncTarget target, string message, CancellationToken cancellationToken)
+    private async Task<SyncResult> PushCore(SyncTarget target, string message, bool interactive, CancellationToken cancellationToken)
     {
         var bound = Normalize(target);
         var commitMessage = string.IsNullOrWhiteSpace(message) ? "Update geometry" : message.Trim();
@@ -155,22 +166,17 @@ public sealed class GeometrySync : IDisposable
         });
         var client = ClientFor(bound.Server);
         await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
-        if (_copy.HasUnsupported)
-            return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
         if (_copy.BaseCommit is not null && !_copy.HasEntries)
             return SyncResult.Fail("The base commit could not be loaded.");
 
-        var captured = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
-        string? expectedHead;
         string? created = null;
+        var offTip = false;
         if (_copy.BaseCommit is null)
         {
-            if (captured.Changes.Count == 0) return NothingToCommit(captured, null);
             await EnsureRepoAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
             var remote = await client.GetBranchAsync(bound.Repo, bound.Branch, cancellationToken).ConfigureAwait(false);
             if (remote is not null)
-                return SyncResult.Fail($"This document is not based on '{bound.Branch}'. Pull that branch into an empty document before pushing.");
-            expectedHead = null;
+                return SyncResult.Fail($"This document is not based on '{bound.Branch}'. Pull that branch first; your objects are kept as local changes.");
         }
         else
         {
@@ -179,17 +185,22 @@ public sealed class GeometrySync : IDisposable
             if (remote is null)
             {
                 await CreateBranchAsync(client, bound, _copy.BaseCommit, previousBranch, cancellationToken).ConfigureAwait(false);
-                created = $"Created branch {bound.Branch} at {_copy.BaseCommit}.";
+                created = $"Created branch {bound.Branch} at {ShortCommit(_copy.BaseCommit)}.";
             }
-
-            if (captured.Changes.Count == 0) return NothingToCommit(captured, created);
-            if (remote is not null && !string.Equals(remote.Commit, _copy.BaseCommit, StringComparison.Ordinal))
+            else
             {
-                var described = captured.Changes.Count == 1 ? "1 change" : $"{captured.Changes.Count} changes";
-                return SyncResult.OffTip(_copy.BaseCommit, $"This model is at {ShortCommit(_copy.BaseCommit)}, which is not the latest commit on '{bound.Branch}'. A push can only add to the tip of a branch, so push the {described} to another branch.");
+                offTip = !string.Equals(remote.Commit, _copy.BaseCommit, StringComparison.Ordinal);
             }
+        }
 
-            expectedHead = _copy.BaseCommit;
+        var captured = await CaptureLocalAsync(client, bound.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false);
+        var prefix = created ?? "";
+        if (captured.Changes.Count == 0) return NothingToCommit(captured, prefix.Length == 0 ? null : prefix);
+        if (offTip)
+        {
+            // Like a detached HEAD in git: a push only adds to the tip of a branch. The caller offers another branch.
+            var described = captured.Changes.Count == 1 ? "1 change" : $"{captured.Changes.Count} changes";
+            return SyncResult.OffTip(_copy.BaseCommit!, $"This model is at {ShortCommit(_copy.BaseCommit!)}, which is not the latest commit on '{bound.Branch}'. A push can only add to the tip of a branch, so pull first or push the {described} to another branch.");
         }
 
         if (captured.Blobs.Count > 0)
@@ -201,16 +212,17 @@ public sealed class GeometrySync : IDisposable
             response = await client.CommitAsync(bound.Repo, new CommitRequest
             {
                 Branch = bound.Branch,
-                ExpectedHead = expectedHead,
+                ExpectedHead = _copy.BaseCommit,
                 Message = commitMessage,
                 Author = Author(),
                 Changes = captured.Changes,
+                Parent = _copy.BaseCommit is null ? null : previousBranch,
             }, cancellationToken).ConfigureAwait(false);
         }
         catch (RhinoTrunkApiException ex) when (ex.Error.Code == ErrorCodes.NoChanges)
         {
             var remembered = OnUi(() => _copy.RememberSerials(captured.Serials));
-            return SyncResult.Success(WithWarning(created ?? "Nothing to commit.", remembered));
+            return SyncResult.Success(WithWarning(prefix.Length == 0 ? "Nothing to commit." : prefix, remembered));
         }
 
         foreach (var version in response.Versions)
@@ -220,8 +232,8 @@ public sealed class GeometrySync : IDisposable
         }
 
         var warning = OnUi(() => _copy.Replace(response.Commit, captured.Entries, captured.Serials));
-        return SyncResult.Success(WithWarning(WithSkips(
-            $"Pushed {captured.Changes.Count} changes to {bound.Branch} ({response.Commit}).", captured.Skipped), warning));
+        var pushed = $"Pushed {captured.Changes.Count} changes to {bound.Branch} ({response.Commit}).";
+        return SyncResult.Success(WithWarning(WithSkips(prefix.Length == 0 ? pushed : prefix + " " + pushed, captured.Skipped), warning));
     }
 
     private sealed record PublishedBranch(SyncResult? Failure, string ChangeNote);
@@ -245,12 +257,23 @@ public sealed class GeometrySync : IDisposable
             taskBase.Adopt(listing);
             if (taskBase.HasUnsupported)
                 return new(SyncResult.Fail("The task's base commit contains entities this client cannot update yet: " + taskBase.UnsupportedSummary + "."), "");
-            var captured = OnUi(() => CaptureResult(task.ResultPath, taskBase));
+            RhinoDoc? result = null;
+            CapturedPush captured;
+            try
+            {
+                result = OnUi(() => RhinoDoc.OpenHeadless(task.ResultPath)) ?? throw new SyncException("Rhino could not open the task's saved result.");
+                var opened = result;
+                captured = await CaptureLocalAsync(client, bound.Repo, () => opened, taskBase, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (result is not null) OnUi(() => result.Dispose());
+            }
             if (captured.Changes.Count == 0)
                 return new(SyncResult.Success(WithSkips($"'{task.Title}' made no changes, so there is nothing to merge.", captured.Skipped)), "");
 
             changeNote = $" ({Describe(captured.Changes)})";
-            var author = new AuthorInfo { Id = "agent-" + task.TaskId[..Math.Min(8, task.TaskId.Length)], Name = "Agent: " + task.Title, Kind = AuthorKinds.Agent };
+            var author = new AuthorInfo { Id = "agent:" + task.TaskId, Name = "Agent: " + task.Title, Kind = AuthorKinds.Agent };
             if (existing is null)
             {
                 await client.CreateBranchAsync(bound.Repo, new CreateBranchRequest
@@ -327,7 +350,7 @@ public sealed class GeometrySync : IDisposable
             await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
             if (_copy.HasUnsupported)
                 return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
-            var local = OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy));
+            var local = await CaptureLocalAsync(client, bound.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false);
             if (local.Changes.Count > 0)
                 return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
         }
@@ -366,7 +389,7 @@ public sealed class GeometrySync : IDisposable
             return SyncResult.Success($"'{into}' already contains '{theirs}'. Nothing to merge.");
         if (!intoModel)
             return SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). The model stays on {bound.Branch}.");
-        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
+        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, discardLocal: true).ConfigureAwait(false);
         return pulled.Ok
             ? SyncResult.Success($"Merged '{theirs}' into {into} ({merged.Commit}). {pulled.Message}")
             : SyncResult.Fail($"Merged '{theirs}' into {into} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
@@ -397,7 +420,7 @@ public sealed class GeometrySync : IDisposable
             return SyncResult.Fail("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
 
         // Pulling the merged result replaces model content, so never run it over unpushed edits.
-        var local = intoModel ? OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy)) : null;
+        var local = intoModel ? await CaptureLocalAsync(client, bound.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false) : null;
         if (local is not null && local.Changes.Count > 0)
             return SyncResult.Fail($"This model has {local.Changes.Count} unpushed changes. Push them first; pulling the merged result would overwrite them.");
 
@@ -450,10 +473,21 @@ public sealed class GeometrySync : IDisposable
         if (!intoModel)
             return SyncResult.Success($"Merged '{task.Title}'{changeNote} into {into} via {branch} ({merged.Commit}). The model stays on {bound.Branch}.");
         // The model has no unpushed edits (checked above), so make it match the merged commit exactly.
-        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
+        var pulled = await PullCore(new SyncTarget(bound.Server, bound.Repo, bound.Branch), commit: null, interactive: false, cancellationToken, discardLocal: true).ConfigureAwait(false);
         return pulled.Ok
             ? SyncResult.Success($"Merged '{task.Title}'{changeNote} into {bound.Branch} via {branch} ({merged.Commit}). {pulled.Message}")
             : SyncResult.Fail($"Merged '{task.Title}' into {bound.Branch} ({merged.Commit}) but pulling it into the model failed: {pulled.Message} Try Pull.");
+    }
+
+    /// <summary>Conflicts and invariant violations of a merge preview, in words.</summary>
+    internal static string MergeProblems(MergePreviewResponse preview)
+    {
+        var parts = new List<string>();
+        if (preview.Conflicts.Count > 0)
+            parts.Add($"{preview.Conflicts.Count} objects or layers were changed on both sides ({string.Join(", ", preview.Conflicts.Take(5).Select(c => c.Kind + " " + c.Id[..Math.Min(8, c.Id.Length)]))})");
+        if (preview.Validation.Count > 0)
+            parts.Add("the result would break the model: " + string.Join("; ", preview.Validation.Take(3).Select(v => v.Message)));
+        return parts.Count == 0 ? "the server refused it." : string.Join("; ", parts) + ".";
     }
 
     // "1 added, 0 changed" style summary so it is obvious the task's commit holds only its own changes.
@@ -463,12 +497,6 @@ public sealed class GeometrySync : IDisposable
         var deleted = objects.Count(change => change.Op == ChangeOps.Delete);
         var others = changes.Count - objects.Count;
         return $"{objects.Count - deleted} objects added or changed, {deleted} deleted" + (others > 0 ? $", {others} layers/settings" : "");
-    }
-
-    private static CapturedPush CaptureResult(string path, WorkingCopy taskBase)
-    {
-        using var doc = RhinoDoc.OpenHeadless(path) ?? throw new SyncException("Rhino could not open the task's saved result.");
-        return DocumentMapper.Capture(doc, taskBase);
     }
 
     private async Task<SyncResult> CheckoutCore(
@@ -489,7 +517,7 @@ public sealed class GeometrySync : IDisposable
                 SyncResult push;
                 try
                 {
-                    push = await PushCore(target, message, cancellationToken).ConfigureAwait(false);
+                    push = await PushCore(target, message, interactive: false, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is SyncException or RhinoTrunkApiException)
                 {
@@ -502,7 +530,7 @@ public sealed class GeometrySync : IDisposable
             }
         }
 
-        var checkout = await PullCommitAsync(target, commit, interactive: false, cancellationToken, replace: true).ConfigureAwait(false);
+        var checkout = await PullCommitAsync(target, commit, interactive: false, discardLocal: true, cancellationToken).ConfigureAwait(false);
         return pushed.Length == 0 ? checkout : checkout with { Message = pushed + checkout.Message };
     }
 
@@ -519,15 +547,16 @@ public sealed class GeometrySync : IDisposable
         if (_copy.HasUnsupported)
             throw new SyncException("The base commit contains entities this client cannot update yet: " + _copy.UnsupportedSummary + ".");
         if (!_copy.HasEntries) throw new SyncException("The base commit could not be loaded.");
-        return OnUi(() => DocumentMapper.Capture(_copy.Require(), _copy).Changes.Count);
+        var local = await CaptureLocalAsync(ClientFor(NormalizeServer(_copy.Server)), _copy.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false);
+        return local.Changes.Count;
     }
 
     private async Task<SyncResult> PullCore(
-        SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool replace = false)
+        SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool discardLocal = false)
     {
         try
         {
-            return await PullCommitAsync(target, commit, interactive, cancellationToken, replace).ConfigureAwait(false);
+            return await PullCommitAsync(target, commit, interactive, discardLocal, cancellationToken).ConfigureAwait(false);
         }
         catch (PullReviewCancelledException)
         {
@@ -535,8 +564,42 @@ public sealed class GeometrySync : IDisposable
         }
     }
 
-    /// <param name="replace">Make the model match the commit without reviewing objects that differ. See <see cref="DocumentMapper.Apply"/>.</param>
-    private async Task<SyncResult> PullCommitAsync(SyncTarget target, string? commit, bool interactive, CancellationToken cancellationToken, bool replace = false)
+    /// <summary>
+    /// Captures the document against its base. Objects whose serialized geometry differs from the base are checked
+    /// again against the decoded base geometry, so a file save or a decode/encode round trip is not a change.
+    /// </summary>
+    private static async Task<CapturedPush> CaptureLocalAsync(
+        RhinoTrunkClient client, string repo, Func<RhinoDoc> document, WorkingCopy copy, CancellationToken cancellationToken)
+    {
+        var first = OnUi(() => DocumentMapper.Capture(document(), copy));
+        if (first.GeometryCandidates.Count == 0) return first;
+        var blobs = await DownloadAsync(client, repo, first.GeometryCandidates.Values.Distinct(StringComparer.Ordinal).ToList(), cancellationToken)
+            .ConfigureAwait(false);
+        return OnUi(() =>
+        {
+            var before = DocumentMapper.DecodeBaseGeometry(first.GeometryCandidates, blobs);
+            try
+            {
+                return DocumentMapper.Capture(document(), copy, before);
+            }
+            finally
+            {
+                foreach (var geometry in before.Values) geometry.Dispose();
+            }
+        });
+    }
+
+    private static string KindOf(string key) => key[..key.IndexOf('\n')];
+
+    private static string IdOf(string key) => key[(key.IndexOf('\n') + 1)..];
+
+    /// <summary>
+    /// Three-way pull: base (the commit the document is at), local (the document) and target (the branch tip or a
+    /// checked-out commit). Changes made only on the server are applied, including deletes; changes made only in the
+    /// document are kept; objects changed on both sides are reviewed (or stop a scripted pull). With
+    /// <paramref name="discardLocal"/> the document is made to match the target exactly.
+    /// </summary>
+    private async Task<SyncResult> PullCommitAsync(SyncTarget target, string? commit, bool interactive, bool discardLocal, CancellationToken cancellationToken)
     {
         var checkout = commit is not null;
         string revision;
@@ -551,8 +614,7 @@ public sealed class GeometrySync : IDisposable
                 throw new SyncException($"Branch name '{requestedBranch}' is not valid.");
             var savedBranch = OnUi(() =>
             {
-                _copy.Require();
-                _copy.Read();
+                Rebind(repo.Server, repo.Repo);
                 var activeBranch = requestedBranch.Length > 0 ? requestedBranch : _copy.Branch;
                 _copy.UseTarget(repo.Server, repo.Repo, activeBranch);
                 return activeBranch;
@@ -567,8 +629,7 @@ public sealed class GeometrySync : IDisposable
             bound = Normalize(target);
             OnUi(() =>
             {
-                _copy.Require();
-                _copy.Read();
+                Rebind(bound.Server, bound.Repo);
                 _copy.UseTarget(bound.Server, bound.Repo, bound.Branch);
             });
             var pullClient = ClientFor(bound.Server);
@@ -579,47 +640,196 @@ public sealed class GeometrySync : IDisposable
         }
 
         var client = ClientFor(bound.Server);
-        var listed = await client.ListEntitiesAsync(
-            bound.Repo, revision, doc: Names.DefaultDoc, includeManifests: true, ct: cancellationToken).ConfigureAwait(false);
-        var entities = listed.Entities;
-        DocumentMapper.RejectUnsupported(entities);
-        var blobs = await DownloadAsync(client, bound.Repo, ComponentHashes(entities), cancellationToken).ConfigureAwait(false);
-        var objectCount = entities.Count(entity => entity.Kind == EntityKinds.Object);
-        var applied = OnUi(() =>
+        await EnsureBaseMapAsync(client, bound.Repo, cancellationToken).ConfigureAwait(false);
+        var baseCommit = _copy.HasEntries ? _copy.BaseCommit : null;
+        var local = await CaptureLocalAsync(client, bound.Repo, () => _copy.Require(), _copy, cancellationToken).ConfigureAwait(false);
+        var localKeys = DocumentMapper.ChangedKeys(local);
+
+        // The target state, and the supported entities that differ between the base and the target.
+        var targetEntries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
+        var incoming = new Dictionary<string, EntityVersion?>(StringComparer.Ordinal);
+        string? skipped = null;
+        if (baseCommit is null)
         {
-            var doc = _copy.Require();
-            var decoded = DocumentMapper.DecodeObjects(entities, blobs);
-            List<ObjectConflict>? conflicts = null;
-            try
+            var listed = await client.ListEntitiesAsync(
+                bound.Repo, revision, doc: Names.DefaultDoc, includeManifests: true, ct: cancellationToken).ConfigureAwait(false);
+            foreach (var entity in listed.Entities) targetEntries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
+            foreach (var entity in DocumentMapper.Supported(listed.Entities, complete: true, out skipped))
+                incoming[WorkingCopy.Key(entity.Kind, entity.Id)] = entity;
+        }
+        else
+        {
+            foreach (var entry in _copy.Entries) targetEntries[WorkingCopy.Key(entry.Kind, entry.Id)] = entry.Copy();
+            if (baseCommit != revision)
             {
-                IReadOnlyDictionary<string, ConflictChoice> choices = new Dictionary<string, ConflictChoice>();
-                if (!replace)
+                var diff = await client.DiffAsync(bound.Repo, baseCommit, revision, includeManifests: true, cancellationToken).ConfigureAwait(false);
+                var changed = new List<EntityVersion>();
+                foreach (var change in diff.Changes)
                 {
-                    conflicts = PullConflicts.Find(doc, decoded);
-                    if (conflicts.Count > 0 && !interactive)
-                        throw new SyncException(PullConflicts.ScriptedMessage(conflicts));
-                    if (conflicts.Count > 0)
-                        choices = PullConflicts.Review(doc, conflicts);
+                    if (change.Doc != Names.DefaultDoc) continue;
+                    var key = WorkingCopy.Key(change.Kind, change.Id);
+                    if (change.To is null)
+                    {
+                        targetEntries.Remove(key);
+                        if (DocumentMapper.IsSupported(change.Kind, change.FromManifest?.Subtype)) incoming[key] = null;
+                        continue;
+                    }
+
+                    var entity = new EntityVersion { Doc = change.Doc, Kind = change.Kind, Id = change.Id, Version = change.To, Manifest = change.ToManifest };
+                    targetEntries[key] = BaseEntry.From(entity);
+                    changed.Add(entity);
                 }
 
-                var serials = DocumentMapper.Apply(doc, entities, blobs, decoded, choices, replace);
-                var entries = new Dictionary<string, BaseEntry>(StringComparer.Ordinal);
-                foreach (var entity in entities)
-                    entries[WorkingCopy.Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
-                return (Warning: _copy.Replace(listed.Commit, entries, serials), Choices: choices);
+                foreach (var entity in DocumentMapper.Supported(changed, complete: false, out skipped))
+                    incoming[WorkingCopy.Key(entity.Kind, entity.Id)] = entity;
+            }
+        }
+
+        if (discardLocal)
+        {
+            // Local changes the target does not touch go back to the target's version, or away.
+            foreach (var key in localKeys)
+            {
+                if (incoming.ContainsKey(key)) continue;
+                incoming[key] = targetEntries.TryGetValue(key, out var entry) && DocumentMapper.IsSupported(entry.Kind, entry.Subtype)
+                    ? entry.ToEntityVersion()
+                    : null;
+            }
+
+            localKeys.Clear();
+        }
+
+        // Classify every incoming change.
+        var apply = new List<(string Key, EntityVersion? Entity)>();
+        var conflictKeys = new List<string>();
+        var keptLocalTables = 0;
+        foreach (var (key, entity) in incoming)
+        {
+            if (!localKeys.Contains(key))
+            {
+                apply.Add((key, entity));
+                continue;
+            }
+
+            if (DocumentMapper.LocalEquals(local, key, entity is null ? null : targetEntries[key]))
+            {
+                localKeys.Remove(key); // the same change on both sides
+                continue;
+            }
+
+            if (KindOf(key) == EntityKinds.Object)
+            {
+                conflictKeys.Add(key);
+            }
+            else if (baseCommit is null)
+            {
+                localKeys.Remove(key); // an unlinked document takes the commit's settings and layers
+                apply.Add((key, entity));
+            }
+            else
+            {
+                keptLocalTables++; // a layer or the settings changed on both sides: the document's version stays, to be pushed
+            }
+        }
+
+        var needed = apply.Where(item => item.Entity is not null).Select(item => item.Entity!)
+            .Concat(conflictKeys.Select(key => incoming[key]).Where(entity => entity is not null).Select(entity => entity!))
+            .ToList();
+        var blobs = await DownloadAsync(client, bound.Repo, ComponentHashes(needed), cancellationToken).ConfigureAwait(false);
+
+        var result = OnUi(() =>
+        {
+            var doc = _copy.Require();
+            var objectPuts = needed.Where(entity => entity.Kind == EntityKinds.Object).ToList();
+            var decoded = DocumentMapper.DecodeObjects(objectPuts, blobs);
+            var decodedById = decoded.ToDictionary(item => item.Entity.Id, StringComparer.Ordinal);
+            var conflicts = new List<ObjectConflict>();
+            try
+            {
+                var deletedObjects = DocumentMapper.DeletedModelObjects(doc);
+                foreach (var key in conflictKeys)
+                {
+                    var id = IdOf(key);
+                    var guid = DocumentMapper.ParseObjectId(id);
+                    var live = doc.Objects.FindId(guid);
+                    var existing = live is { IsDeleted: false } ? live : deletedObjects.GetValueOrDefault(guid);
+                    conflicts.Add(ObjectConflict.Create(id, guid, existing is null || existing.IsDeleted, existing?.Geometry,
+                        decodedById.TryGetValue(id, out var item) ? item.Geometry : null));
+                }
+
+                IReadOnlyDictionary<string, ConflictChoice> choices = new Dictionary<string, ConflictChoice>(StringComparer.Ordinal);
+                if (conflicts.Count > 0)
+                {
+                    if (!interactive) throw new SyncException(PullConflicts.ScriptedMessage(conflicts));
+                    choices = PullConflicts.Review(doc, conflicts);
+                }
+
+                var changes = new IncomingChanges { RemoveEmptyLocalLayers = baseCommit is null && !discardLocal };
+                foreach (var key in targetEntries.Keys.Where(key => KindOf(key) == EntityKinds.Layer))
+                    changes.TargetLayers.Add(Guid.Parse(IdOf(key)));
+                foreach (var (key, entity) in apply)
+                {
+                    var id = IdOf(key);
+                    var kind = KindOf(key);
+                    if (entity is null)
+                    {
+                        if (kind == EntityKinds.Object) changes.ObjectDeletes.Add(id);
+                        else if (kind == EntityKinds.Layer) changes.LayerDeletes.Add(id);
+                        else if (DocumentMapper.IsTableKind(kind)) changes.TableDeletes.Add((kind, id));
+                        continue;
+                    }
+
+                    if (kind == EntityKinds.Settings) changes.Settings = DocumentMapper.RequireAttributes(entity, blobs);
+                    else if (kind == EntityKinds.Layer) changes.LayerPuts.Add(new LayerPut(entity, DocumentMapper.RequireAttributes(entity, blobs)));
+                    else if (DocumentMapper.IsTableKind(kind)) changes.TablePuts.Add((entity, DocumentMapper.RequireAttributes(entity, blobs)));
+                    else changes.ObjectPuts.Add((decodedById[id], ConflictChoice.KeepIncoming));
+                }
+
+                foreach (var key in conflictKeys)
+                {
+                    var id = IdOf(key);
+                    var choice = choices.TryGetValue(id, out var picked) ? picked : ConflictChoice.KeepExisting;
+                    if (decodedById.TryGetValue(id, out var item)) changes.ObjectPuts.Add((item, choice));
+                    else if (choice == ConflictChoice.KeepIncoming) changes.ObjectDeletes.Add(id);
+                    if (choice == ConflictChoice.KeepIncoming) localKeys.Remove(key);
+                }
+
+                var outcome = changes.IsEmpty ? new ApplyOutcome() : DocumentMapper.ApplyChanges(doc, changes);
+                // Template layers of an unlinked document that the pull removed are no longer local changes.
+                localKeys.RemoveWhere(key => KindOf(key) == EntityKinds.Layer && doc.Layers.FindId(Guid.Parse(IdOf(key))) is not { IsDeleted: false });
+
+                // A serial number vouches that an object still equals its entry, so objects with local changes get none.
+                var serials = new Dictionary<string, uint>(local.Serials, StringComparer.Ordinal);
+                foreach (var key in localKeys) serials.Remove(IdOf(key));
+                foreach (var pair in outcome.Serials) serials[pair.Key] = pair.Value;
+                var warning = _copy.Replace(revision, targetEntries, serials);
+                return (Warning: warning, Choices: choices, Applied: apply.Count(item => KindOf(item.Key) == EntityKinds.Object),
+                    KeptLayers: outcome.KeptLayers);
             }
             finally
             {
-                if (conflicts is not null)
-                {
-                    foreach (var conflict in conflicts) conflict.Dispose();
-                }
-
+                foreach (var conflict in conflicts) conflict.Dispose();
                 foreach (var item in decoded) item.Geometry.Dispose();
             }
         });
-        return SyncResult.Success(WithWarning(
-            PullSummary(bound.Branch, listed.Commit, objectCount, applied.Choices, checkout), applied.Warning));
+
+        var objectCount = targetEntries.Keys.Count(key => KindOf(key) == EntityKinds.Object);
+        var message = PullSummary(bound.Branch, revision, objectCount, result.Choices, checkout, baseCommit == revision && result.Applied == 0);
+        if (result.Applied > 0) message += $" {result.Applied} objects added, changed or removed.";
+        if (localKeys.Count > 0) message += $" Kept {localKeys.Count} local changes; push them, or pull with Discard to drop them.";
+        if (keptLocalTables > 0) message += $" {keptLocalTables} layers or settings changed on both sides; your version is kept.";
+        if (result.KeptLayers.Count > 0) message += " Kept layers that still hold your objects: " + string.Join(", ", result.KeptLayers) + ".";
+        if (!string.IsNullOrEmpty(skipped)) message += $" Not shown in Rhino (kept on the server): {skipped}.";
+        return SyncResult.Success(WithWarning(message, result.Warning));
+    }
+
+    /// <summary>Switching server or repository drops the base: a base commit only exists in the repository it came from.</summary>
+    private void Rebind(string server, string repo)
+    {
+        _copy.Require();
+        _copy.Read();
+        var same = string.Equals(_copy.Server, server, StringComparison.OrdinalIgnoreCase) && string.Equals(_copy.Repo, repo, StringComparison.Ordinal);
+        if (!same && _copy.BaseCommit is not null) _copy.Detach();
     }
 
     private async Task<GraphResponse> LoadGraphCore(string server, string repo, CancellationToken cancellationToken)
@@ -792,6 +1002,9 @@ public sealed class GeometrySync : IDisposable
             if (_disposed) return SyncResult.Fail("The panel has closed.");
             if (!await _operation.WaitAsync(0, cancellationToken).ConfigureAwait(false))
                 return SyncResult.Fail("A pull or push is already running.");
+            // A commit preview draws over the model and hides objects; anything that changes the model or its
+            // commit makes it wrong, so it comes down first. Cached meshes stay: they are keyed by geometry hash.
+            DiscardPreview();
             try
             {
                 var result = await action().ConfigureAwait(false);
@@ -894,7 +1107,7 @@ public sealed class GeometrySync : IDisposable
     private static string Format(RhinoTrunkApiException exception)
     {
         if (exception.Error.Code == ErrorCodes.RefConflict)
-            return "The branch has new commits. Update is not available yet. " + exception.Error.Message;
+            return "Someone pushed to the branch at the same moment. Run the command again to update and retry.";
         if (LocalServer.IsMissingRoute(exception))
             return "The server does not have an endpoint this plugin uses, so it is probably older than the plugin. Update and restart the server.";
         if (exception.Error.Errors is not { Count: > 0 } details)
@@ -909,11 +1122,13 @@ public sealed class GeometrySync : IDisposable
         return exception.Error.Message + " " + string.Join(" ", parts);
     }
 
-    private static string PullSummary(string branch, string commit, int objectCount, IReadOnlyDictionary<string, ConflictChoice> choices, bool checkout)
+    private static string PullSummary(string branch, string commit, int objectCount, IReadOnlyDictionary<string, ConflictChoice> choices, bool checkout, bool upToDate)
     {
         var message = checkout
             ? $"Checked out {ShortCommit(commit)} ({objectCount} objects)."
-            : $"Pulled {branch} ({commit}, {objectCount} objects).";
+            : upToDate
+                ? $"{branch} is up to date ({ShortCommit(commit)})."
+                : $"Pulled {branch} ({commit}, {objectCount} objects).";
         if (choices.Count == 0) return message;
         var existing = 0;
         var incoming = 0;
