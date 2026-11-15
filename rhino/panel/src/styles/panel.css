@@ -268,7 +268,6 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .task-options .scope-picker { margin-top: 18px; }
 @media (max-width: 480px) { .new-task-form { padding: 10px 16px 24px; } }
 /* Ellipsis reference: persistent task navigation, records, and a quiet overview rail. */
-:root.dark { --panel: #211f1e; --soft: #252322; --ink: #e7e5e1; --line: #383633; --subtle: #aaa69e; --blue: #8fb6d0; --selected: #302e2b; --good: #8bb79c; }
 .workspace-body { grid-template-columns: 245px minmax(0, 1fr); }
 .planner-link + .planner-link { margin-top: 3px; }
 .tree-row { min-height: 44px; }
@@ -351,6 +350,126 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .session-nav-line { border-radius: 5px; }
 .session-nav-line.selected { background: var(--selected); color: var(--blue); }
 .session-nav-line .session-nav { background: transparent; }
+
+/* Polish: the Agents tab shares the header and graph language: 12px type, hairlines, violet for agent work. */
+.control-plane { background: var(--background); min-height: 0; }
+.agents h2 { font-size: 14px; letter-spacing: -.1px; }
+.agents h3 { font-size: 12px; }
+.preview-banner { padding: 5px 14px; font-size: 11px; background: color-mix(in srgb, var(--agent) 10%, transparent); color: var(--agent); }
+input:not([type=checkbox]), textarea, select { border-radius: 6px; padding: 6px 9px; font-size: 12px; background: var(--background); }
+input:not([type=checkbox]):focus, textarea:focus, select:focus { outline: none; border-color: var(--ring); }
+.workspace-body { grid-template-columns: 252px minmax(0, 1fr); }
+.task-sidebar { background: var(--card); }
+.sidebar-heading { padding: 12px 10px 6px 14px; }
+.sidebar-heading h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); font-weight: 600; }
+.quiet { height: 26px; padding: 0 8px; border-radius: 6px; color: var(--ink); font-size: 12px; }
+.quiet:hover { background: var(--accent); }
+.sidebar-heading .quiet { color: var(--agent); }
+.planner-link { margin: 0 8px; padding: 0 10px; height: 30px; border-radius: 6px; }
+.selected { background: var(--accent); color: var(--ink); }
+.planner-link:not(.selected):hover, .tree-row:not(.selected):hover, .session-nav-line:not(.selected):hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.archive-toggle { color: var(--subtle); margin: 2px 8px 6px; }
+input.task-search { margin: 2px 10px 10px; width: calc(100% - 20px); height: 28px; }
+.tree-scroll { padding: 0 8px 14px; }
+.session-nav-line, .tree-row { border-radius: 6px; position: relative; }
+.session-nav-line.selected { background: var(--accent); color: var(--ink); }
+.session-nav-line.selected::before, .tree-row.selected::before { content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--agent); }
+.session-nav strong { font-size: 13px; }
+.session-nav small { font-size: 11px; }
+.tree-title { font-size: 12px; }
+.task-tree { margin-left: 8px; }
+.tree-leaf { border-left-color: var(--border); }
+/* Status reads like the graph's ref pills. */
+.status { height: 18px; padding: 0 7px 0 6px; border-radius: 5px; font-size: 10.5px; line-height: 1; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); }
+.tree-row .status { font-size: 10px; }
+.status-running, .status-queued, .status-stopping { color: var(--agent); }
+.status-draft { color: var(--subtle); }
+.status-stopped, .status-interrupted { color: var(--subtle); }
+.status-ready { color: var(--good); }
+.sidebar-footer { padding: 10px; background: var(--card); }
+.sidebar-footer p { font-size: 10.5px; }
+.primary { background: var(--primary); color: var(--primary-foreground); border-radius: 6px; height: 30px; padding: 0 12px; font-size: 12px; font-weight: 600; gap: 8px; }
+:root.dark .primary { color: var(--primary-foreground); }
+.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.primary.small { height: 26px; padding: 0 10px; font-size: 12px; }
+.count { background: #ffffff2e; border-radius: 4px; font-size: 11px; }
+.icon-button { border-radius: 6px; }
+.icon-button:hover, .quiet:hover { background: var(--accent); }
+.merged-chip { color: var(--good); }
+.merge-button, .row-actions .icon-button { width: 32px; height: 32px; border-radius: 8px; }
+.merge-button { background: color-mix(in srgb, var(--agent) 14%, transparent); }
+.row-menu > summary { width: 30px; height: 30px; }
+.row-menu > summary { border-radius: 6px; }
+.row-menu > div { border-radius: 8px; box-shadow: 0 8px 28px #0006; padding: 4px; width: 156px; }
+.row-menu button { border-radius: 5px; font-size: 12px; padding: 6px 8px; }
+.inspector-heading { padding: 12px 18px 8px; min-height: 0; }
+.inspector-heading h2 { font-size: 16px; font-weight: 600; }
+.breadcrumb { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 3px; }
+.session-return { text-transform: none; letter-spacing: 0; color: var(--agent); }
+.stop-button { height: 26px; padding: 0 9px; border-radius: 6px; color: var(--bad); font-size: 12px; }
+.inspector-tabs { gap: 2px; padding: 0 12px; }
+.inspector-tabs button { padding: 0 10px; height: 30px; font-size: 12px; }
+.inspector-tabs button.active { font-weight: 600; border-bottom-color: var(--primary); }
+.session-plan { background: var(--card); max-height: min(230px, 40%); }
+.session-plan-heading { background: transparent; padding: 4px 14px; }
+.session-plan-heading h3 { font-size: 12px; }
+.session-plan-row { padding: 5px 10px 5px 14px; border-top: 1px solid var(--border); }
+.session-plan-row:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.transcript { padding: 4px 18px 16px; }
+.entry { padding: 8px 0; border-bottom: 0; }
+.entry-meta { font-size: 11px; gap: 8px; margin-bottom: 3px; }
+.entry-assistant .entry-meta span:first-child { color: var(--agent); font-weight: 600; }
+.entry-user { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; }
+.entry-user .entry-meta span:first-child { font-weight: 600; color: var(--ink); }
+.entry-tool, .entry-result { border-left: 2px solid var(--border); padding-left: 10px; }
+.entry pre { background: var(--card); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+.entry p { font-size: 12.5px; line-height: 1.6; }
+.composer-area { padding: 6px 14px 12px; }
+.composer { border-radius: 10px; background: var(--card); padding: 3px; }
+.composer:focus-within { border-color: var(--ring); }
+.composer textarea { background: transparent; border: 0; padding: 7px 9px; }
+.composer-bottom > span { font-size: 11px; }
+.send-button { background: var(--primary); color: var(--primary-foreground); width: 28px; height: 28px; border-radius: 7px; }
+.proposal-strip { padding: 10px 18px; background: color-mix(in srgb, var(--agent) 7%, transparent); border-bottom: 1px solid var(--border); justify-content: flex-start; }
+.proposal-strip > div:first-child { color: var(--agent); font-weight: 600; margin-right: auto; }
+.proposal-strip .quiet { border: 1px solid var(--border); background: var(--card); color: var(--ink); }
+.proposal-strip .quiet:hover { background: var(--accent); }
+.notice { padding: 8px 18px; }
+.execution-overview { width: 220px; padding: 16px; background: var(--card); }
+.execution-overview h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--subtle); }
+.execution-overview dl { margin: 14px 0; gap: 2px; }
+.execution-overview dt { font-size: 11px; margin-top: 8px; }
+.execution-overview dd { font-size: 12px; }
+.sessions-page { padding: 16px 18px; }
+.session-metrics { gap: 10px; margin: 0 0 16px; }
+.session-metrics > div { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; gap: 2px; }
+.session-metrics strong { font-size: 20px; letter-spacing: -.4px; }
+.sessions-table { border-radius: 8px; background: var(--card); }
+.sessions-table-heading { background: transparent; padding: 8px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.session-table-row { padding: 0 14px; min-height: 38px; }
+.session-table-row:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.sessions-empty h3 { font-size: 15px; }
+.new-task-form { padding: 18px 20px 32px; gap: 16px; }
+.new-task-intro svg { color: var(--agent); }
+.new-task-intro h3, .inspector-empty h3 { font-size: 17px; font-weight: 600; }
+.task-options > summary { color: var(--subtle); }
+.layer-option { border-radius: 6px; padding: 5px 8px; }
+.layer-option input { accent-color: var(--agent); }
+.example-prompt { border-radius: 8px; color: var(--ink); }
+.draft-footer { font-size: 12px; }
+.task-facts { padding-top: 14px; }
+.scope-details { padding: 16px 18px; gap: 14px; }
+
+
+/* Colour language: git is blue, agent work is violet. Everything inside the Agents tab takes the violet accent. */
+.agents { --primary: var(--agent); --blue: var(--agent); --ring: var(--agent); --primary-foreground: #fff; --selected: color-mix(in srgb, var(--agent) 14%, var(--card)); }
+:root.dark .agents { --primary-foreground: #1b1330; }
+.agents .selected, .agents .session-nav-line.selected { background: var(--selected); }
+.agents .inspector-tabs button.active { border-bottom-color: var(--agent); }
+.sessions-blank { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--subtle); }
+.sessions-blank > svg { color: var(--agent); }
+.sessions-blank p { font-size: 12px; }
+
 }
 
 

@@ -50,6 +50,16 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
   }, [tasks]);
   const pending = readyTasks(control);
 
+  // Picking a branch in the header brings its tip into view and selects it.
+  const branchName = repo.branch.trim();
+  useEffect(() => {
+    const tip = history.commits.find((commit) => commit.refs?.includes(branchName));
+    if (!tip) return;
+    setSelected(tip.id);
+    listRef.current?.querySelector(`[data-branch="${CSS.escape(branchName)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchName]);
+
   useEffect(() => {
     if (focus === 0) return;
     listRef.current?.querySelector("[data-pr]")?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -69,7 +79,7 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
           <p className={cn("px-4 py-3 text-[12px]", history.error ? "text-destructive" : "text-muted-foreground")}>{note}</p>
         ) : (
           layout.rows.map((row) => {
-            const pills = pillsFor(row.commit, headBranch, byBranch, history.head);
+            const pills = pillsFor(row.commit, headBranch, byBranch);
             const pr = row.commit.refs.map((ref) => byBranch.get(ref)).find(Boolean);
             const head = hashOf(row.commit.id) === hashOf(history.head);
             return (
@@ -83,7 +93,9 @@ export function History({ repo, focus }: { repo: Repo; focus: number }) {
                 busy={!idle}
                 selected={selected === row.commit.id}
                 onSelect={() => setSelected(row.commit.id)}
-                onCheckout={() => repo.checkout(row.commit.id)}
+                onCheckout={() => repo.checkout(row.commit.id, row.commit.refs.find((ref) => pickable(ref)))}
+                onPickBranch={(name) => repo.setBranch(name)}
+                current={branchName}
                 onMerge={() => pr && repo.mergePr(pr.id)}
                 onClose={() => pr && repo.closePr(pr.id)}
               />
@@ -109,12 +121,13 @@ function historyNote(repo: Repo, requestedRepo: string, ready: boolean): string 
   return null;
 }
 
-function pillsFor(commit: GraphCommit, branch: string, prs: Map<string, AgentTask>, head: string): Pill[] {
-  const isHead = hashOf(commit.id) === hashOf(head);
+const pickable = (ref: string) => !!ref && !ref.startsWith("tag:") && !ref.startsWith("agent/");
+
+function pillsFor(commit: GraphCommit, branch: string, prs: Map<string, AgentTask>): Pill[] {
   const pills: Pill[] = [];
   for (const ref of commit.refs ?? []) {
     if (ref.startsWith("tag:")) pills.push({ name: ref.slice(4), kind: "tag", head: false });
-    else if (ref) pills.push({ name: ref, kind: prs.has(ref) || ref.startsWith("agent/") ? "agent" : "branch", head: isHead && ref === branch });
+    else if (ref) pills.push({ name: ref, kind: prs.has(ref) || ref.startsWith("agent/") ? "agent" : "branch", head: ref === branch });
   }
   // The branch checked out is listed first; tags last.
   pills.sort((a, b) => Number(b.head) - Number(a.head) || Number(a.kind === "tag") - Number(b.kind === "tag"));
@@ -130,10 +143,10 @@ function Gutter({ gutter, children }: { gutter: number; children: React.ReactNod
 }
 
 function Row({
-  row, gutter, pills, pr, head, busy, selected, onSelect, onCheckout, onMerge, onClose,
+  row, gutter, pills, pr, head, busy, selected, onSelect, onCheckout, onPickBranch, onMerge, onClose,
 }: {
   row: LaneRow; gutter: number; pills: Pill[]; pr: AgentTask | undefined; head: boolean; busy: boolean; selected: boolean;
-  onSelect: () => void; onCheckout: () => void; onMerge: () => void; onClose: () => void;
+  onSelect: () => void; onCheckout: () => void; onPickBranch: (name: string) => void; current?: string; onMerge: () => void; onClose: () => void;
 }) {
   const { commit, lane } = row;
   const agent = commit.author?.kind === "agent";
@@ -176,7 +189,7 @@ function Row({
       </Gutter>
       <div className="flex min-w-0 items-center gap-1.5">
         {pills.map((pill) => (
-          <RefPill key={pill.name} pill={pill} color={color} />
+          <RefPill key={pill.name} pill={pill} color={color} onPick={() => onPickBranch(pill.name)} />
         ))}
         {pr ? <PrBadge task={pr} onMerge={onMerge} onClose={onClose} /> : null}
         <span className={cn("max-w-[34ch] truncate", head ? "font-medium" : "")} title={commit.message}>{first}</span>
@@ -202,20 +215,25 @@ function Row({
   );
 }
 
-function RefPill({ pill, color }: { pill: Pill; color: string }) {
+function RefPill({ pill, color, onPick }: { pill: Pill; color: string; onPick: () => void }) {
   const tint = pill.kind === "agent" ? AGENT : pill.kind === "tag" ? "var(--muted-foreground)" : color;
+  const pickable = pill.kind === "branch";
   return (
     <span
+      data-branch={pill.kind === "tag" ? undefined : pill.name}
+      role={pickable ? "button" : undefined}
+      onClick={pickable ? (event) => { event.stopPropagation(); onPick(); } : undefined}
       className={cn(
         "inline-flex h-[18px] max-w-[26ch] shrink-0 items-center gap-1 rounded-[5px] border px-1.5 text-[11px] leading-none",
         pill.head ? "font-semibold" : "font-normal",
+        pickable && "cursor-pointer hover:brightness-125",
       )}
       style={{
         color: tint,
         borderColor: `color-mix(in srgb, ${tint} ${pill.head ? 80 : 45}%, transparent)`,
         background: pill.head ? `color-mix(in srgb, ${tint} 16%, transparent)` : "transparent",
       }}
-      title={pill.name}
+      title={pickable ? `Switch to ${pill.name}` : pill.name}
     >
       {pill.kind === "tag" ? <Tag size={10} /> : pill.kind === "agent" ? <Bot size={10} /> : null}
       <span className="truncate">{pill.name.replace(/^agent\//, "")}</span>
@@ -227,17 +245,17 @@ function RefPill({ pill, color }: { pill: Pill; color: string }) {
 function PrBadge({ task, onMerge, onClose }: { task: AgentTask; onMerge: () => void; onClose: () => void }) {
   return (
     <span
-      className="inline-flex h-[20px] shrink-0 items-center gap-0.5 rounded-[5px] border pl-1.5 text-[11px] leading-none"
+      className="inline-flex h-[28px] shrink-0 items-center gap-1 rounded-[7px] border pl-2 text-[12px] leading-none"
       style={{ color: AGENT, borderColor: `color-mix(in srgb, ${AGENT} 55%, transparent)`, background: `color-mix(in srgb, ${AGENT} 12%, transparent)` }}
     >
-      <GitPullRequest size={11} />
-      <span className="pl-0.5 pr-1">Awaiting approval</span>
+      <GitPullRequest size={14} />
+      <span className="pr-1">Awaiting approval</span>
       {task.merging ? (
-        <Loader2 size={12} className="mx-1 animate-spin" />
+        <Loader2 size={15} className="mx-1.5 animate-spin" />
       ) : (
         <>
-          <IconAction label={`Merge into ${task.prBase ?? "main"}`} onClick={onMerge}><GitMerge size={12} /></IconAction>
-          <IconAction label="Close pull request" onClick={onClose}><X size={12} /></IconAction>
+          <IconAction label={`Merge into ${task.prBase ?? "main"}`} onClick={onMerge}><GitMerge size={16} /></IconAction>
+          <IconAction label="Close pull request" onClick={onClose}><X size={15} /></IconAction>
         </>
       )}
     </span>
@@ -252,7 +270,7 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
       aria-label={label}
       onClick={(event) => { event.stopPropagation(); onClick(); }}
       onDoubleClick={(event) => event.stopPropagation()}
-      className="flex h-[18px] w-[18px] items-center justify-center rounded hover:bg-foreground/15"
+      className="flex h-[24px] w-[24px] items-center justify-center rounded-md hover:bg-foreground/15"
     >
       {children}
     </button>
@@ -296,11 +314,11 @@ function ReadyRow({ task, gutter, last, onOpen }: { task: AgentTask; gutter: num
         type="button"
         disabled={task.opening}
         onClick={onOpen}
-        className="ml-2 inline-flex h-[20px] shrink-0 items-center gap-1 rounded-[5px] border px-1.5 text-[11px] leading-none hover:bg-foreground/10 disabled:opacity-50"
+        className="ml-2 inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[7px] border px-2.5 text-[12px] font-medium leading-none hover:bg-foreground/10 disabled:opacity-50"
         style={{ color: AGENT, borderColor: `color-mix(in srgb, ${AGENT} 55%, transparent)` }}
         title="Commit this result to its own branch and open a pull request"
       >
-        {task.opening ? <Loader2 size={11} className="animate-spin" /> : <GitPullRequest size={11} />}
+        {task.opening ? <Loader2 size={14} className="animate-spin" /> : <GitPullRequest size={14} />}
         Open PR
       </button>
     </div>

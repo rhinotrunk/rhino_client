@@ -165,11 +165,13 @@ export function useRepo(bridge: Bridge) {
       bridge.send({ type: "push", ...spec, branch: branch.trim(), message: message.trim() || "Update geometry" });
       setMessage("");
     },
-    checkout(commit: string) {
+    checkout(commit: string, onBranch?: string) {
       if (!idle) return;
       const spec = snapshot();
+      const target = onBranch ?? branch.trim();
+      if (onBranch) setBranch(onBranch);
       begin("Checking out…");
-      bridge.send({ type: "checkout", ...spec, branch: branch.trim(), commit });
+      bridge.send({ type: "checkout", ...spec, branch: target, commit });
     },
     refresh() {
       if (!idle) return;
