@@ -1,6 +1,6 @@
 import './styles/panel.css';
 import { createRoot } from 'react-dom/client';
-import { Component, useState } from 'react';
+import { Component, useEffect, useState } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { App } from './app';
 import { Panel } from './panel';
@@ -42,6 +42,18 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: str
 const tabs = [{ id: 'repository', label: 'Repository' }, { id: 'agents', label: 'Agents' }] as const;
 function Shell() {
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('repository');
+  // Rhino answers 'ready' with theme/status/state. If that reply is lost (page loaded before the host was
+  // listening, or the panel was re-docked), ask again until anything arrives. 'ready' is idempotent.
+  useEffect(() => {
+    let heard = false;
+    const stop = bridge.subscribe(() => { heard = true; });
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      if (heard || ++attempts > 20) { window.clearInterval(timer); return; }
+      bridge.send({ type: 'ready' });
+    }, 1500);
+    return () => { stop(); window.clearInterval(timer); };
+  }, []);
   return <div className="flex h-full flex-col bg-background text-foreground">
     <div role="tablist" aria-label="RhinoClient" className="flex shrink-0 gap-1 border-b bg-card px-2 pt-1.5">
       {tabs.map(t => <button key={t.id} role="tab" id={`tab-${t.id}`} aria-selected={tab === t.id} aria-controls={`pane-${t.id}`} type="button"

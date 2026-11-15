@@ -18,7 +18,7 @@ public sealed class ClientPanel : Panel
     private readonly TaskControl _control;
     private readonly uint _documentSerialNumber;
     private readonly GeometrySync _sync;
-    private readonly CancellationTokenSource _unload = new();
+    private CancellationTokenSource _unload = new();
     private int _graphGeneration;
     private bool _busy;
     private bool _closed;
@@ -267,6 +267,19 @@ public sealed class ClientPanel : Panel
     {
         base.OnLoad(e);
         ThemeSettings.ThemeChanged += OnThemeChanged;
+        // Rhino can unload and reload a docked panel (re-docking, tab switches). OnUnLoad closes the panel
+        // to stop in-flight calls; reopen it here so status updates and sync calls work again.
+        if (_closed && !_disposed)
+        {
+            _closed = false;
+            if (_unload.IsCancellationRequested)
+            {
+                _unload.Dispose();
+                _unload = new CancellationTokenSource();
+            }
+            SendSession();
+            SendStatus(_busy ? _busyMessage : "Connected to Rhino", false, _busy);
+        }
     }
 
     protected override void OnUnLoad(EventArgs e)
