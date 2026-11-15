@@ -394,3 +394,17 @@ input.task-search { margin: 0 12px 12px; width: calc(100% - 24px); padding: 7px 
 .history .commit-checkout:hover rect {
   fill: var(--accent);
 }
+
+/* Selected commits: a ring on the dot and an emphasised subject. Shift-click adds to the selection. */
+.history .commit-row {
+  cursor: pointer;
+}
+.history .commit-entry.is-selected circle {
+  stroke: var(--primary, #6d28d9);
+  stroke-width: 3px;
+}
+.history .commit-row.is-selected .commit-subject {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

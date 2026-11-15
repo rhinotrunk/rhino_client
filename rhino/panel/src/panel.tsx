@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { renderHistory } from "./graph/render";
+import { clearSelection, renderHistory } from "./graph/render";
 import type { Bridge } from "./protocol/bridge";
 import type { GraphCommit } from "./protocol/events";
 import { cn } from "@/lib/utils";
@@ -51,6 +51,8 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   const branchRequest = useRef({ server: "", repo: "" });
   const hostRef = useRef<HTMLDivElement>(null);
   const checkoutRef = useRef<(id: string) => void>(() => {});
+  const selectRef = useRef<(ids: string[]) => void>(() => {});
+  const hoverRef = useRef<(id: string) => void>(() => {});
   const disabled = !ready || busy;
 
   useLayoutEffect(() => {
@@ -122,7 +124,11 @@ export function Panel({ bridge }: { bridge: Bridge }) {
   useEffect(() => {
     const host = hostRef.current;
     if (!host || history.commits.length === 0) return;
-    renderHistory(host, history.commits, scheme, (id) => checkoutRef.current(id));
+    renderHistory(host, history.commits, scheme, {
+      onCheckout: (id) => checkoutRef.current(id),
+      onSelect: (ids) => selectRef.current(ids),
+      onHover: (id) => hoverRef.current(id),
+    });
   }, [history.commits, scheme]);
 
   useEffect(() => {
@@ -193,8 +199,24 @@ export function Panel({ bridge }: { bridge: Bridge }) {
     bridge.send({ type: "pull", ...spec, branch: branch.trim() });
   }
 
+  // One selected commit previews it in the viewport; two or more open merge picking in Rhino.
+  selectRef.current = (ids: string[]) => {
+    if (!ready) return;
+    const spec = snapshot();
+    if (ids.length === 0) bridge.send({ type: "commit.preview.clear" });
+    else if (ids.length === 1) bridge.send({ type: "commit.preview", ...spec, commit: ids[0]! });
+    else bridge.send({ type: "merge.pick", ...spec, branch: branch.trim(), commits: ids });
+  };
+
+  hoverRef.current = (id: string) => {
+    if (!ready || busy) return;
+    const spec = snapshot();
+    bridge.send({ type: "commit.prefetch", ...spec, commit: id });
+  };
+
   checkoutRef.current = (id: string) => {
     if (!ready || busy) return;
+    if (hostRef.current) clearSelection(hostRef.current);
     const spec = snapshot();
     setBusy(true);
     setError(false);

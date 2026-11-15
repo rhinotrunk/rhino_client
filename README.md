@@ -1,16 +1,16 @@
 # RhinoClient
 
-A dockable Rhino panel with two tabs. **Repository** (first) is git-style version control for the model: pull, push, and a history graph. **Agents** (second) is the AI control plane: Codex workers propose changes to a copy of the model. Run **RhinoClient** in Rhino's command line to open the panel, or run **RhinoClientPull** and **RhinoClientPush** from the command line.
+A dockable Rhino panel with two tabs. **Repository** (first) is git-style version control for the model: pull, push, and a history graph. **Agents** (second) is the AI control plane: Codex workers propose changes to a copy of the model. Run **RhinoClient** in Rhino's command line to open the panel, or run the version-control commands from the command line: **RhinoClientPull**, **RhinoClientPush**, **RhinoClientBranch**, **RhinoClientMerge** and **RhinoClientCompare**.
 
 ## Repository tab
 
-Enter a server, repository, and branch, then pull or push. Pull checks the branch tip out into a document that has no model objects. Push commits settings, layers, and model geometry. The panel draws the repository history. Hover a commit in that graph and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
+Enter a server, repository, and branch, then pull or push. Pull is a three-way merge between the commit the model is on, the model, and the branch tip: changes made only on the server are applied (including deletions), changes made only in the model are kept, and objects changed on both sides are reviewed in the viewport. Only the entities that changed since the model's commit, and only their blobs, are downloaded. Push saves the file first, then commits settings, materials, linetypes, groups, layers, and model geometry; if the branch has moved on, it pulls first and then pushes on top. Notes and other entities this client does not show stay on the server untouched. The panel draws the repository history. Click a commit (its dot or its message) to preview it in the viewport against your model: added objects green, modified blue with your version hidden, removed as red ghosts; click again to clear. Previews are cached, so cycling through commits is immediate, and the meshes are stored on the server as `preview-mesh.v1` derived data so other clients do not mesh them again; hovering a commit loads it ahead of the click. Shift-click two or more commits to pick a merge in Rhino: each commit's changes are drawn in its own colour, click a faint object to take that version and a taken one to drop it (objects the commits change differently start undecided), and press Enter to merge the picks into your branch as one commit, or Esc to leave. Shift-clicking more commits while picking adds them to the session. Hover a commit and choose Checkout to pull that commit. The result of a pull, checkout, or push is written to Rhino's command history and shown under the buttons.
 
 ## Agents tab
 
 Start a **session** with a description; its orchestrator proposes a task tree with dependencies. Review the tasks, then run them individually or together. Each running task owns an external Codex CLI worker and an isolated headless Rhino document copy.
 
-“Ready to merge” means a saved local task result you can preview in the viewport. The preview compares the task's copy with the snapshot it started from: added objects are green, removed ones red, changed ones amber, and everything untouched grey. **Merge**, next to a finished task's “…” menu, uses the same sync pipeline as Push and Pull: it commits the result to its own `agent/…` branch (authored as an agent, branched from the commit the task started at), merges that branch into the model's branch with a merge commit (so history shows the task splitting off as one commit and joining back in), and pulls the merged result into the open model. The model must already be on a repository branch (push it from the Repository tab first), and it must have no unpushed changes, because the final pull makes the model match the merged commit: existing objects are updated in place and objects the commit no longer lists are removed (one undo step). If the merge conflicts, the task branch is kept for review. Opening a pull request and approval rules are not part of this yet. The source model is not changed by task workers.
+“Ready to merge” means a saved local task result you can preview in the viewport. The preview compares the task's copy with the snapshot it started from: added objects are green, removed ones red, changed ones amber, and everything untouched grey. **Merge**, next to a finished task's “…” menu, uses the same sync pipeline as Push and Pull: it commits the result to its own `agent/…` branch (authored as an agent, branched from the commit the task started at), merges that branch into the model's branch with a merge commit (so history shows the task splitting off as one commit and joining back in), and pulls the merged result into the open model. The model must already be on a repository branch (push it from the Repository tab first), and it must have no unpushed changes, because the final pull makes the model match the merged commit: existing objects are updated in place and objects the commit no longer lists are removed (one undo step). If the merge conflicts, the task branch is kept for review. The merge is previewed on the server first; a conflict keeps the task branch, and **RhinoClientMerge** on that branch resolves it. The source model is not changed by task workers.
 
 ## Try a session
 
@@ -48,9 +48,19 @@ npm start
 
 Once Rhino opens, run `RhinoClient`. The panel uses Rhino's standard docking system: dock it with other panels or float it. Repeating the command opens/selects the existing panel.
 
-A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for `git_engine` next to itself and runs it with `dotnet`. Set `RHINOTRUNK_SERVER_PROJECT` to the server `.csproj` if that project lives somewhere else.
+A pull or push to a local `http://localhost` address starts the RhinoTrunk server when nothing is listening. The plugin looks for a `git_engine_rs` checkout next to itself and runs its built `rhinotrunk-server` (or `cargo run --release` the first time); it falls back to the older C# server in `git_engine`. Set `RHINOTRUNK_SERVER_EXE` to a `rhinotrunk-server` binary, or `RHINOTRUNK_SERVER_PROJECT` to a C# server `.csproj`, to choose the server, and `RHINOTRUNK_DATA` to choose its data folder.
 
-`RhinoClientPull` and `RhinoClientPush` use the server, repository, and branch stored on the document. Press Enter to accept them. `Server`, `Repository`, `Branch`, and, for push, `Message` change a value first. A script can pass those options, for example `_-RhinoClientPush _Repository demo _Branch main _Enter`. When the panel has been opened for this document, the command uses that same checkout, so the panel status stays in step with the command.
+The commands use the server, repository, and branch stored on the document; press Enter to accept them. When the panel is open for this document, a command uses the panel's checkout, so the panel status stays in step.
+
+| Command | What it does | Options |
+| --- | --- | --- |
+| `RhinoClientPull` | Three-way pull of the branch tip. Conflicts are reviewed in the viewport (blue incoming, amber yours); a scripted pull stops on them instead. | `Server`, `Repository`, `Branch`, `Discard` (make the model match the branch exactly) |
+| `RhinoClientPush` | Commits the model. A commit needs a saved file: an unsaved model prompts for a location, unsaved edits prompt to **Save** or **Revert** (back to the last commit). Pushing to a new branch name creates that branch at the model's commit. | `Server`, `Repository`, `Branch`, `Message`, `Path` (save location when scripting) |
+| `RhinoClientBranch` | Creates a branch at the model's commit, records the current branch as its parent, and switches the model to it. | the branch name |
+| `RhinoClientMerge` | Merges the model's branch into its parent (or `Into`). Shows the merged result in the viewport (green added, blue modified with the current version hidden, red removed ghosts), steps through conflicts (take the target's or the branch's version), shows rule-resolved conflicts, asks for confirmation, merges with a merge commit, and switches the model to the target. Merging into a protected branch: your confirmation is the human approval. | `Into`, `ApproveRules` (scripted merges whose conflicts merge rules resolved) |
+| `RhinoClientCompare` | Shows option branches as they would land on a point of main: added green, removed red ghost, modified blue, outlined beneath the object. | `Options` (comma-separated; default every branch made from `At`), `At` (branch, tag or commit; default `main`), `Mode` (`Cycle`, `Overlay`, `Side`), `Off` |
+
+A script can pass options, for example `_-RhinoClientPush _Repository demo _Branch main _Message "First" _Enter`. Scripted merges and pulls never prompt; they stop with a message where a person has to decide.
 
 `npm start` launches Rhino 8 with `RHINO_PACKAGE_DIRS` pointing to the build output. It does not use an already running Rhino instance. Restart this development instance after changing C# or rebuilding the embedded UI.
 
@@ -91,7 +101,7 @@ rhino/
   plugin/
     RhinoClientPlugin.ai.cs           plugin entry point and panel registration
     Commands/RhinoClientCommand.ai.cs command that opens the panel
-    Commands/GeometryCommands.ai.cs   RhinoClientPull and RhinoClientPush
+    Commands/GeometryCommands.ai.cs   RhinoClientPull, Push, Branch, Merge and Compare, and the commit save policy
     UI/ClientPanel.ai.cs              Eto WebView host: routes git sync and agent control messages
     Sync/                             pull/push, working copy, document mapper (RhinoTrunk client)
     Agent/                            sessions, task supervisor, Codex runner, scoped MCP tools

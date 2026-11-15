@@ -5,6 +5,7 @@ using Eto.Forms;
 using Rhino;
 using Rhino.Runtime;
 using Rhino.UI;
+using RhinoClient.Commands;
 using RhinoClient.Sync;
 
 namespace RhinoClient.UI;
@@ -23,6 +24,8 @@ public sealed class ClientPanel : Panel
     private int _reposGeneration;
     private int _branchesGeneration;
     private bool _busy;
+    private CancellationTokenSource? _preview;
+    private PickSession? _pick;
     private bool _closed;
     private bool _disposed;
     private string _busyMessage = "Working…";
@@ -90,9 +93,36 @@ public sealed class ClientPanel : Panel
                         Text(command, "commit"));
                     break;
                 case "push":
+                    if (CommitPolicy.EnsureSaved(Rhino.RhinoDoc.FromRuntimeSerialNumber(_sync.DocumentSerialNumber), interactive: false) is { } unsaved)
+                    {
+                        SendStatus(unsaved, true, false);
+                        break;
+                    }
+
                     _ = Push(
                         new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")),
                         Text(command, "message"));
+                    break;
+                case "commit.preview":
+                    if (_pick is { } running)
+                    {
+                        running.Update(new[] { Text(command, "commit") });
+                        break;
+                    }
+
+                    PreviewCommit(Text(command, "server"), Text(command, "repo"), Text(command, "commit"));
+                    break;
+                case "commit.prefetch":
+                    _ = _sync.PrefetchCommitAsync(Text(command, "server"), Text(command, "repo"), Text(command, "commit"), _unload.Token);
+                    break;
+                case "commit.preview.clear":
+                    _preview?.Cancel();
+                    _pick?.Cancel();
+                    GeometrySync.ClearPreview();
+                    SendStatus("Preview cleared.", false, _busy);
+                    break;
+                case "merge.pick":
+                    PickMerge(new SyncTarget(Text(command, "server"), Text(command, "repo"), Text(command, "branch")), Strings(command, "commits"));
                     break;
                 case "task.merge":
                     MergeTask(Text(command, "id"));
@@ -121,6 +151,10 @@ public sealed class ClientPanel : Panel
 
     internal Task<SyncResult> Push(SyncTarget target, string message) =>
         RunAsync("Pushing…", token => _sync.PushAsync(target, message, token));
+
+    /// <summary>Runs a version-control operation on this panel's checkout, sharing its busy state and status line.</summary>
+    internal Task<SyncResult> Run(string busyMessage, Func<GeometrySync, CancellationToken, Task<SyncResult>> action) =>
+        RunAsync(busyMessage, token => action(_sync, token));
 
     // One-click merge of a finished agent task: same sync pipeline as Push and Pull, so it shares their busy state.
     private async void MergeTask(string id)
@@ -321,6 +355,55 @@ public sealed class ClientPanel : Panel
             _bridge.Post(new { type = "status", message, error, busy });
         });
     }
+
+    // A click on a history dot: cancel the previous preview and draw this one. Not serialized with pull or push.
+    private async void PreviewCommit(string server, string repo, string commit)
+    {
+        _preview?.Cancel();
+        var token = (_preview = CancellationTokenSource.CreateLinkedTokenSource(_unload.Token)).Token;
+        try
+        {
+            var result = await _sync.PreviewCommitAsync(server, repo, commit, token);
+            if (!token.IsCancellationRequested) SendStatus(result.Message, !result.Ok, _busy);
+        }
+        catch (Exception ex)
+        {
+            SendStatus(ex.Message, true, _busy);
+        }
+    }
+
+    // Two or more dots selected: start merge picking in Rhino, or hand the new selection to the running session.
+    private async void PickMerge(SyncTarget target, IReadOnlyList<string> commits)
+    {
+        _preview?.Cancel();
+        if (_pick is { } running)
+        {
+            running.Update(commits);
+            return;
+        }
+
+        var session = _pick = new PickSession(commits);
+        try
+        {
+            await Run("Merge picking in Rhino…", (sync, token) => sync.PickMergeAsync(target, session, token));
+        }
+        finally
+        {
+            if (ReferenceEquals(_pick, session)) _pick = null;
+            SendGraphRefresh();
+        }
+    }
+
+    private void SendGraphRefresh()
+    {
+        var target = _sync.ReadTarget();
+        if (!string.IsNullOrEmpty(target.Repo)) _ = SendGraph(target.Server, target.Repo);
+    }
+
+    private static IReadOnlyList<string> Strings(JsonElement command, string name) =>
+        command.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString() ?? "").Where(text => text.Length > 0).ToList()
+            : Array.Empty<string>();
 
     private static string Text(JsonElement command, string name) =>
         command.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

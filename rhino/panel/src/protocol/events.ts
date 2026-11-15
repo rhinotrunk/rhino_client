@@ -38,7 +38,10 @@ export type PanelCommand =
   | { type: 'pull'; server: string; repo: string; branch: string }
   | { type: 'checkout'; server: string; repo: string; branch: string; commit: string }
   | { type: 'push'; server: string; repo: string; branch: string; message: string }
-  | { type: 'graph'; server: string; repo: string };
+  | { type: 'graph'; server: string; repo: string }
+  | { type: 'commit.preview' | 'commit.prefetch'; server: string; repo: string; commit: string }
+  | { type: 'commit.preview.clear' }
+  | { type: 'merge.pick'; server: string; repo: string; branch: string; commits: string[] };
 export type HostEvent =
   | { type: 'control.state' } & ControlState
   | { type: 'control.error'; message: string }

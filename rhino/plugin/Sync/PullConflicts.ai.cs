@@ -28,37 +28,6 @@ internal static class PullConflicts
 {
     private const double GhostTransparency = 0.8;
 
-    internal static List<ObjectConflict> Find(RhinoDoc doc, IReadOnlyList<DecodedObject> objects)
-    {
-        var deleted = DocumentMapper.DeletedModelObjects(doc);
-        var conflicts = new List<ObjectConflict>();
-        try
-        {
-            foreach (var item in objects)
-            {
-                var id = DocumentMapper.ParseObjectId(item.Entity.Id);
-                var live = doc.Objects.FindId(id);
-                RhinoObject? owner = live is { IsDeleted: false } ? live : null;
-                var wasDeleted = false;
-                if (owner is null && deleted.TryGetValue(id, out var dead))
-                {
-                    owner = dead;
-                    wasDeleted = true;
-                }
-
-                if (owner is null || DocumentMapper.ContentMatches(doc, owner, item)) continue;
-                conflicts.Add(ObjectConflict.Capture(item, id, wasDeleted, owner));
-            }
-
-            return conflicts;
-        }
-        catch
-        {
-            foreach (var conflict in conflicts) conflict.Dispose();
-            throw;
-        }
-    }
-
     internal static string ScriptedMessage(IReadOnlyList<ObjectConflict> conflicts)
     {
         var listed = string.Join(", ", conflicts.Take(8).Select(conflict => conflict.Id.ToString("D")));
@@ -66,20 +35,28 @@ internal static class PullConflicts
         return $"Pull stopped. {conflicts.Count} objects already in the document differ: {listed}{extra}. Run RhinoClientPull to review them in the viewport.";
     }
 
-    internal static Dictionary<string, ConflictChoice> Review(RhinoDoc doc, IReadOnlyList<ObjectConflict> conflicts)
+    internal static Dictionary<string, ConflictChoice> Review(RhinoDoc doc, IReadOnlyList<ObjectConflict> conflicts) =>
+        Review(doc, conflicts, allowMerge: true, existingLabel: "the one already in the document", incomingLabel: "the incoming object");
+
+    /// <summary>
+    /// Steps through conflicts in the viewport. <paramref name="allowMerge"/> offers keeping both copies (pulls only).
+    /// The labels name the two sides in the prompt (amber is "existing", blue is "incoming").
+    /// </summary>
+    internal static Dictionary<string, ConflictChoice> Review(RhinoDoc doc, IReadOnlyList<ObjectConflict> conflicts, bool allowMerge, string existingLabel, string incomingLabel)
     {
         var conduit = PreviewConduit.Current ?? throw new SyncException("RhinoClient is not loaded.");
         var choices = new Dictionary<string, ConflictChoice>(StringComparer.Ordinal);
         var incomingSolid = true;
         var index = 0;
         RhinoApp.WriteLine(
-            "RhinoClient: " + conflicts.Count + " objects differ. Blue is the incoming object, amber is the one already in the document. Merge keeps both and gives the incoming object a new id.");
+            "RhinoClient: " + conflicts.Count + " objects differ. Blue is " + incomingLabel + ", amber is " + existingLabel + "." +
+            (allowMerge ? " Merge keeps both and gives the incoming object a new id." : ""));
         try
         {
             while (index < conflicts.Count)
             {
                 Show(doc, conduit, conflicts, index, incomingSolid);
-                switch (Prompt(conflicts[index], index, conflicts.Count))
+                switch (Prompt(conflicts[index], index, conflicts.Count, allowMerge))
                 {
                     case ReviewPrompt.Cancel:
                         throw new PullReviewCancelledException();
@@ -167,10 +144,16 @@ internal static class PullConflicts
         var which = incomingSolid
             ? "Incoming is solid blue. The document object is ghosted amber."
             : "The document object is solid amber. Incoming is ghosted blue.";
+        var what = conflict.IncomingDeleted
+            ? "The incoming commit deletes this object; you changed it."
+            : conflict.Deleted
+                ? "You deleted this object; the incoming commit changed it."
+                : "You and the incoming commit both changed this object.";
         return new[]
         {
             "Conflict " + (index + 1) + " of " + count,
             conflict.Id.ToString("D"),
+            what,
             which,
         };
     }
@@ -193,7 +176,7 @@ internal static class PullConflicts
         viewport.ZoomBoundingBox(box);
     }
 
-    private static ReviewPrompt Prompt(ObjectConflict conflict, int index, int count)
+    private static ReviewPrompt Prompt(ObjectConflict conflict, int index, int count, bool allowMerge)
     {
         var id = conflict.Id.ToString("D");
         var get = new GetOption();
@@ -201,7 +184,7 @@ internal static class PullConflicts
         get.AcceptNothing(false);
         var keepExisting = get.AddOption("KeepExisting");
         var keepIncoming = get.AddOption("KeepIncoming");
-        var merge = get.AddOption("Merge");
+        var merge = allowMerge ? get.AddOption("Merge") : -1;
         var toggle = get.AddOption("Toggle");
         var restExisting = get.AddOption("RestExisting");
         var restIncoming = get.AddOption("RestIncoming");
@@ -247,22 +230,28 @@ internal sealed class ObjectConflict : IDisposable
     internal CapturedShape Incoming { get; }
     internal BoundingBox Bounds { get; }
 
-    internal static ObjectConflict Capture(DecodedObject item, Guid id, bool deleted, RhinoObject owner)
+    /// <summary>
+    /// A three-way conflict: the document and the incoming commit both changed the object since the base.
+    /// <paramref name="existing"/> is null when it was deleted locally, <paramref name="incoming"/> when the commit deletes it.
+    /// </summary>
+    internal static ObjectConflict Create(string entityId, Guid id, bool existingDeleted, GeometryBase? existing, GeometryBase? incoming)
     {
-        var existing = CapturedShape.From(owner.Geometry);
-        CapturedShape incoming;
+        var existingShape = CapturedShape.From(existing);
+        CapturedShape incomingShape;
         try
         {
-            incoming = CapturedShape.From(item.Geometry);
+            incomingShape = CapturedShape.From(incoming);
         }
         catch
         {
-            existing.Dispose();
+            existingShape.Dispose();
             throw;
         }
 
-        return new ObjectConflict(item.Entity.Id, id, deleted, existing, incoming);
+        return new ObjectConflict(entityId, id, existingDeleted || existing is null, existingShape, incomingShape) { IncomingDeleted = incoming is null };
     }
+
+    internal bool IncomingDeleted { get; private init; }
 
     public void Dispose()
     {

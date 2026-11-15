@@ -98,25 +98,12 @@ internal sealed class WorkingCopy
     internal bool SerialMatches(string id, uint serial) =>
         _serials.TryGetValue(id, out var known) && known == serial;
 
+    /// <summary>
+    /// Takes a commit's listing as the base. Entities this client does not apply (notes, other tables, block
+    /// instances) are kept in the map so a push leaves them alone on the server.
+    /// </summary>
     internal void Adopt(EntitiesResponse response)
     {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var entity in response.Entities)
-        {
-            if (DocumentMapper.IsSupported(entity)) continue;
-            var label = entity.Kind == EntityKinds.Object && entity.Manifest?.Subtype is { Length: > 0 } subtype
-                ? entity.Kind + ":" + subtype
-                : entity.Kind;
-            counts[label] = counts.TryGetValue(label, out var count) ? count + 1 : 1;
-        }
-
-        if (counts.Count > 0)
-        {
-            HasUnsupported = true;
-            UnsupportedSummary = string.Join(", ", counts.Select(pair => pair.Value + " " + pair.Key));
-            return;
-        }
-
         _entries.Clear();
         foreach (var entity in response.Entities)
             _entries[Key(entity.Kind, entity.Id)] = BaseEntry.From(entity);
@@ -218,6 +205,27 @@ internal sealed class BaseEntry
         Subtype = Subtype,
         Refs = Refs.Select(reference => new EntityRef { Kind = reference.Kind, Id = reference.Id, Role = reference.Role }).ToList(),
     };
+
+    /// <summary>The entity this entry describes, with a manifest rebuilt from its components and refs.</summary>
+    public EntityVersion ToEntityVersion()
+    {
+        var components = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (Attributes is not null) components[DocumentMapper.AttributesComponent] = Attributes;
+        if (Geometry is not null) components[DocumentMapper.GeometryComponent] = Geometry;
+        return new EntityVersion
+        {
+            Kind = Kind,
+            Id = Id,
+            Version = Version,
+            Manifest = new Manifest
+            {
+                Kind = Kind,
+                Subtype = Subtype,
+                Components = components,
+                Refs = Refs.Select(reference => new EntityRef { Kind = reference.Kind, Id = reference.Id, Role = reference.Role }).ToList(),
+            },
+        };
+    }
 
     public static BaseEntry From(EntityVersion entity)
     {
