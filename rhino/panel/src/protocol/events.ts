@@ -2,6 +2,8 @@ export type GraphAuthor = { id: string; name?: string | null; kind: string };
 export type GraphCommit = {
   id: string; parents: string[]; generation: number; timestamp: string; message: string; author: GraphAuthor; refs: string[];
 };
+// A pasted image, already shrunk to a JPEG by the panel.
+export type PromptImageData = { name: string; mediaType: string; data: string };
 export type Scope = { wholeDocument?: boolean; objectIds: string[]; layerIds: string[] };
 export type TaskStatus = 'draft' | 'queued' | 'running' | 'stopping' | 'stopped' | 'ready' | 'failed' | 'interrupted';
 export type Activity = { kind: 'user' | 'assistant' | 'tool' | 'result' | 'error' | 'status'; text: string; at: string };
@@ -29,9 +31,9 @@ export type PanelCommand =
   | { type: 'ready' | 'scope.selection' | 'preview.clear' }
   | { type: 'panel.error'; message: string }
   | { type: 'settings.save' } & Settings
-  | { type: 'session.create'; id: string; title?: string; prompt: string; scope: Scope; model?: string }
+  | { type: 'session.create'; id: string; title?: string; prompt: string; scope: Scope; model?: string; images?: PromptImageData[] }
   | { type: 'session.model'; id: string; model: string }
-  | { type: 'session.message'; id: string; prompt: string; scope?: Scope }
+  | { type: 'session.message'; id: string; prompt: string; scope?: Scope; images?: PromptImageData[] }
   | { type: 'session.stop' | 'session.archive' | 'session.restore'; id: string }
   | { type: 'tasks.launch'; sessionId: string }
   | { type: 'task.add'; sessionId: string; id?: string; launch?: boolean; branchFromResult?: boolean; title: string; instructions: string; parentId?: string; scope: Scope }
@@ -41,7 +43,7 @@ export type PanelCommand =
   | { type: 'task.merge'; id: string; resolve: 'ours' | 'theirs' }
   | { type: 'task.pr.base'; id: string; branch: string }
   | { type: 'branch.merge'; theirs: string; into: string; resolve?: 'ours' | 'theirs' }
-  | { type: 'task.message'; id: string; message: string }
+  | { type: 'task.message'; id: string; message: string; images?: PromptImageData[] }
   | { type: 'repos'; server: string }
   | { type: 'branches'; server: string; repo: string }
   | { type: 'pull'; server: string; repo: string; branch: string }

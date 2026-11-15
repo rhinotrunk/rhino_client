@@ -26,7 +26,7 @@ internal static class ClaudeRunner
 
     public static Task Run(TaskEntry task, ControlState settings, string model, string directory, string url, string prompt,
         Func<string, Task> onEvent, Action<Process> started, CancellationToken ct,
-        TimeSpan? idleTimeout = null, TimeSpan? turnTimeout = null)
+        TimeSpan? idleTimeout = null, TimeSpan? turnTimeout = null, IReadOnlyList<PromptImage>? images = null)
     {
         var psi = new ProcessStartInfo(settings.ClaudePath)
         {
@@ -39,6 +39,21 @@ internal static class ClaudeRunner
         // Only the rhino tools: no shell, files, web, or user MCP servers. Anything not allowed is denied, not prompted.
         args.AddRange(["--strict-mcp-config", "--mcp-config", mcp, "--allowedTools", "mcp__rhino",
             "--disallowedTools", "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite"]);
+        // Images travel as content blocks, which print mode only accepts through its streaming input format.
+        if (images is { Count: > 0 })
+        {
+            args.AddRange(["--input-format", "stream-json"]);
+            prompt = JsonSerializer.Serialize(new
+            {
+                type = "user",
+                message = new
+                {
+                    role = "user",
+                    content = images.Select(image => (object)new { type = "image", source = new { type = "base64", media_type = image.MediaType, data = Convert.ToBase64String(File.ReadAllBytes(image.Path)) } })
+                        .Append(new { type = "text", text = prompt }).ToArray(),
+                },
+            });
+        }
         foreach (var arg in args) psi.ArgumentList.Add(arg);
         psi.Environment["MCP_TOOL_TIMEOUT"] = "120000";
         task.Model = model;

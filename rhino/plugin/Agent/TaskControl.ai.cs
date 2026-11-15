@@ -138,7 +138,7 @@ internal sealed class TaskControl : IDisposable
     private string ModelOf(string? sessionId) =>
         (sessionId is null ? null : State.Sessions.FirstOrDefault(x => x.Id == sessionId)?.Model) ?? State.Model;
     // Runs one turn with whichever CLI serves the model. A thread started by the other provider cannot be resumed.
-    private Task RunAgent(TaskEntry task, string model, string url, string prompt, CancellationToken token)
+    private Task RunAgent(TaskEntry task, string model, string url, string prompt, CancellationToken token, IReadOnlyList<PromptImage>? images = null)
     {
         var provider = ModelCatalog.ProviderOf(model);
         if (task.WorkerProvider is not null && task.WorkerProvider != provider) task.WorkerThreadId = null;
@@ -146,8 +146,8 @@ internal sealed class TaskControl : IDisposable
         Func<string, Task> onEvent = line => ParseEvent(task, line);
         Action<System.Diagnostics.Process> started = p => task.Process = p;
         return provider == ModelCatalog.Claude
-            ? ClaudeRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token)
-            : CodexRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token);
+            ? ClaudeRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token, images: images)
+            : CodexRunner.Run(task, State, model, _directory, url, prompt, onEvent, started, token, images: images);
     }
     // What the tasks this one builds on found, oldest first, so a subtask starts from their resolution and not just their geometry.
     private string UpstreamContext(TaskEntry task)
@@ -280,7 +280,7 @@ internal sealed class TaskControl : IDisposable
                 var session = new SessionEntry { Model = ReadModel(cmd), Id = AgentJson.Text(cmd, "id", Guid.NewGuid().ToString("N")), Title = AgentJson.Text(cmd, "title", initialPrompt[..Math.Min(70, initialPrompt.Length)]), Scope = ReadScope(cmd) };
                 if (State.Sessions.Any(s => s.Id == session.Id)) throw new InvalidOperationException("Session already exists.");
                 State.Sessions.Add(session);
-                StartPlanning(session, initialPrompt);
+                StartPlanning(session, initialPrompt, PromptImages.Save(cmd, _directory));
                 break;
             case "session.model":
                 // Applies to the planner and to tasks run from now on; finished work keeps the model that made it.
@@ -289,7 +289,7 @@ internal sealed class TaskControl : IDisposable
             case "session.message":
                 var existingSession = Session(id);
                 if (cmd.TryGetProperty("scope", out _)) existingSession.Scope = ReadScope(cmd);
-                StartPlanning(existingSession, AgentJson.Text(cmd, "prompt"));
+                StartPlanning(existingSession, AgentJson.Text(cmd, "prompt"), PromptImages.Save(cmd, _directory));
                 break;
             case "session.stop":
                 var stoppedSession = Session(id);
@@ -388,10 +388,13 @@ internal sealed class TaskControl : IDisposable
                 continuing.Paused = false;
                 if (continuing.Status is not ("ready" or "stopped" or "failed" or "interrupted")) throw new InvalidOperationException("Stop the task or wait for it to finish before sending a follow-up.");
                 var message = AgentJson.Text(cmd, "message");
-                if (string.IsNullOrWhiteSpace(message)) break;
+                var attached = PromptImages.Save(cmd, _directory);
+                if (string.IsNullOrWhiteSpace(message) && attached.Count == 0) break;
+                if (string.IsNullOrWhiteSpace(message)) message = "See the attached image.";
                 // Follow-ups reuse the task's working copy and CLI conversation.
                 continuing.Instructions = message; continuing.Status = "queued"; continuing.Error = null;
-                Log(continuing, "user", message); Pump(); break;
+                continuing.PendingImages = attached;
+                Log(continuing, "user", message + PromptImages.Note(attached)); Pump(); break;
             case "preview.clear":
                 _previewTaskId = null; _preview.Clear(); Publish(); break;
             case "task.show":
@@ -472,16 +475,16 @@ internal sealed class TaskControl : IDisposable
         if (task.Status == "queued") { task.Status = "stopped"; Log(task, "status", "Stopped before launch."); }
         else if (task.Status == "running") { task.Status = "stopping"; task.Cancellation?.Cancel(); Log(task, "status", "Stopping. An in-flight geometry operation may finish."); }
     }
-    private void StartPlanning(SessionEntry session, string request)
+    private void StartPlanning(SessionEntry session, string request, IReadOnlyList<PromptImage> images)
     {
         if (session.Archived) throw new InvalidOperationException("Restore this session to continue the conversation.");
         if (session.IsPlanning) throw new InvalidOperationException("This session is already preparing tasks.");
-        if (string.IsNullOrWhiteSpace(request)) throw new InvalidOperationException("Enter a message first.");
+        if (string.IsNullOrWhiteSpace(request) && images.Count == 0) throw new InvalidOperationException("Enter a message first.");
         var planner = new TaskEntry { Title = "Session planner", SessionId = session.Id, WorkerThreadId = session.PlannerThreadId, WorkerProvider = session.PlannerProvider, Cancellation = new(), Scope = ScopeCopy(session.Scope), Document = Source };
         _planners[session.Id] = planner;
         session.IsPlanning = true;
-        Log(planner, "user", request);
-        _ = RunPlanner(planner, session, request);
+        Log(planner, "user", request + PromptImages.Note(images));
+        _ = RunPlanner(planner, session, request, images);
     }
     private object Propose(SessionEntry session, JsonElement arguments)
     {
@@ -504,7 +507,7 @@ internal sealed class TaskControl : IDisposable
         State.Tasks.AddRange(tasks); Publish();
         return new { created = tasks.Select(t => new { t.Id, t.Title }).ToArray(), message = "Tasks are ready for human review within this session. No workers have launched." };
     }
-    private async Task RunPlanner(TaskEntry planner, SessionEntry session, string request)
+    private async Task RunPlanner(TaskEntry planner, SessionEntry session, string request, IReadOnlyList<PromptImage> images)
     {
         try
         {
@@ -517,7 +520,7 @@ internal sealed class TaskControl : IDisposable
             var existing = State.Tasks.Where(t => t.SessionId == session.Id && !t.Deleted && !t.Archived).Select(t => new { t.Id, t.Title, t.Status, t.ParentId, t.Paused, summary = t.Activity.LastOrDefault(a => a.Kind == "assistant")?.Text });
             var prompt = "You coordinate a Rhino modeling session. Planning is the beginning of this session, not a separate user workflow. Inspect model context before planning. For an initial request, call propose_plan once with the smallest useful set of concrete tasks: a simple request needs only one task. Shared prerequisites are parents. Every requested design option MUST be its own sibling task and its own document copy. Never bundle several options in a task such as Develop-three-versions. A grid plus three facade options requires four tasks: one grid parent and three facade children. Do not execute geometry. For follow-up discussion, answer questions or propose additional tasks only when requested. Existing task IDs may be used as parentKey. Do not duplicate existing tasks. The human must launch reviewed tasks; acceptance is deferred. Available worker operations: polyline/box/sphere creation, move, rotate, scale, copy, delete. No scripts or arbitrary commands.\nExisting tasks: " + JsonSerializer.Serialize(existing, AgentJson.Options) + "\nUser: " + request;
             prompt += $"\nPropose tasks first. Default to calling propose_plan right away on the initial request; do not open with questions. Where the request leaves details open (dimensions, spacing, bay counts), choose sensible, modest values, write them into the task instructions as explicit assumptions, and mention them briefly in your summary so the user can correct them. Ask a question only when you genuinely cannot make a reasonable plan without the answer, and then ask at most one or two short questions in a single message. A count of units or bays is not a spacing in document units; never turn an ambiguous count into thousands of objects. Include explicit dimensions, spacing and estimated object count in geometry task instructions. Each worker turn permits at most {WorkerBudget.MaxToolCalls} tool calls; split larger work only when its scale is explicit.";
-            await RunAgent(planner, ModelOf(session.Id), mcp.Url, prompt, planner.Cancellation.Token);
+            await RunAgent(planner, ModelOf(session.Id), mcp.Url, prompt, planner.Cancellation.Token, images);
         }
         catch (OperationCanceledException) { await RhinoThread.Run(() => { Log(planner, "status", "Session planning stopped."); return true; }); }
         catch (Exception ex)
@@ -558,7 +561,8 @@ internal sealed class TaskControl : IDisposable
             var prompt = "You are a Rhino geometry worker. Use only the rhino MCP tools to inspect and edit your assigned document copy. Begin with get_context and list_objects. Scope is enforced by the tools. Never use scripts, shell, external MCP servers, or ActiveDoc. Coordinates use document units. Only polyline/box/sphere creation, transforms and deletion are available. If your request requires unsupported operations or scope expansion, explain that limitation rather than claiming success. Do the requested geometry work, then summarize actual changes and limitations. The shared model is unchanged and PR acceptance is deferred.\nTask: " + task.Title + "\n" + task.Instructions;
             prompt += UpstreamContext(task);
             prompt += $"\nBefore editing, estimate the number of objects and tool calls. Your turn is limited to {WorkerBudget.MaxToolCalls} tool calls and stops after {WorkerBudget.MaxConsecutiveErrors} consecutive tool errors. If dimensions or counts are ambiguous, or the requested work exceeds the limit, explain and request clarification or a smaller task before creating geometry. Do not repeatedly retry invalid geometry or unsupported operations.";
-            await RunAgent(task, ModelOf(task.SessionId), mcp.Url, prompt, token);
+            var turnImages = task.PendingImages; task.PendingImages = [];
+            await RunAgent(task, ModelOf(task.SessionId), mcp.Url, prompt, token, turnImages);
             await RhinoThread.Run(() =>
             {
                 token.ThrowIfCancellationRequested();

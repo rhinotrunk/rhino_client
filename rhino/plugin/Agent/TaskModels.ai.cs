@@ -47,6 +47,8 @@ internal sealed class TaskEntry
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? FinishedAt { get; set; }
     public List<ActivityEntry> Activity { get; set; } = [];
+    /// <summary>Images attached to the next follow-up turn; used once.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public List<PromptImage> PendingImages { get; set; } = [];
     [System.Text.Json.Serialization.JsonIgnore] public CancellationTokenSource? Cancellation { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public System.Diagnostics.Process? Process { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public Rhino.RhinoDoc? Document { get; set; }

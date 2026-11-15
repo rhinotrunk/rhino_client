@@ -33,7 +33,7 @@ internal static class CodexRunner
 
     public static Task Run(TaskEntry task, ControlState settings, string model, string directory, string url, string prompt,
         Func<string, Task> onEvent, Action<Process> started, CancellationToken ct,
-        TimeSpan? idleTimeout = null, TimeSpan? turnTimeout = null)
+        TimeSpan? idleTimeout = null, TimeSpan? turnTimeout = null, IReadOnlyList<PromptImage>? images = null)
     {
         var psi = new ProcessStartInfo(settings.CodexPath)
         {
@@ -49,6 +49,8 @@ internal static class CodexRunner
             "-c", $"mcp_servers.rhino.url={JsonSerializer.Serialize(url)}",
             "-c", "mcp_servers.rhino.default_tools_approval_mode=\"approve\"",
             "-c", "mcp_servers.rhino.tool_timeout_sec=120"]);
+        // One attached value each, so the prompt marker "-" is never read as another image.
+        foreach (var image in images ?? []) args.Add("--image=" + image.Path);
         task.Model = model;
         args.AddRange(["-m", model, "-c", "model_reasoning_effort=\"low\""]);
         args.Add("-");
